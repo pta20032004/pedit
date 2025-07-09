@@ -1,0 +1,35 @@
+# GUI Framework
+PyQt5
+
+# Video Processing
+opencv-python
+moviepy
+ffmpeg-python
+
+# Google AI Services
+google-cloud-speech
+google-cloud-translate
+google-cloud-texttospeech
+google-generativeai
+google-auth        
+google-genai       
+# Image Processing
+Pillow
+numpy
+opencv-python
+av
+# Audio Processing
+pydub
+librosa
+
+# Utilities
+requests
+python-dotenv
+
+# Subtitle Processing
+pysrt
+webvtt-py
+
+# Authentication
+google-auth
+google-auth-oauthlib
