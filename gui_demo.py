@@ -55,15 +55,23 @@ API Management:
 """
 
 import subprocess
-import time  # 🔥 THÊM MỚI - để đo thời gian API call
+import time  
 from typing import Tuple
 from banner.banner import add_video_banner
 import threading
 import sys
 import json
 import os
+import re
 
 
+try:
+    from gg_api.get_subtitle import fix_srt_timestamps
+    SUBTITLE_FIX_AVAILABLE = True
+    print("✅ Subtitle fix function loaded successfully")
+except ImportError as e:
+    SUBTITLE_FIX_AVAILABLE = False
+    print(f"⚠️ Warning: Subtitle fix function not found: {str(e)}")
 
 # 🔥 CRITICAL FIX: Đảm bảo có thể import gg_api
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -445,21 +453,6 @@ class VideoEditorMainWindow(QMainWindow):
             self.add_log("ERROR", f"❌ SRT pre-processing failed: {str(e)}")
             return srt_file_path
 
-    def wrap_text_for_tiktok(self, text: str, max_width_chars: int = 25) -> list:
-        """
-        Chia text thành các dòng ngắn phù hợp với TikTok
-        """
-        import textwrap
-        
-        # Sử dụng textwrap để chia text thông minh
-        wrapped_lines = textwrap.wrap(text, width=max_width_chars, break_long_words=False)
-        
-        # Nếu quá nhiều dòng, cố gắng ghép lại
-        if len(wrapped_lines) > 2:
-            # Thử với width lớn hơn
-            wrapped_lines = textwrap.wrap(text, width=max_width_chars + 10, break_long_words=False)
-        
-        return wrapped_lines
 
     def add_subtitles_to_video(self, input_video: str, srt_file: str, output_video: str) -> bool:
         """
@@ -534,164 +527,6 @@ class VideoEditorMainWindow(QMainWindow):
             return False
 
     
-    def convert_srt_to_ass(self, srt_content: str) -> str:
-        """
-        🔥 NEW: Convert SRT content to basic ASS format for better FFmpeg compatibility
-        """
-        try:
-            ass_header = """[Script Info]
-    Title: Auto-generated ASS
-    ScriptType: v4.00+
-
-    [V4+ Styles]
-    Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-    Style: Default,Arial,40,&Hffffff,&Hffffff,&H0,&H0,0,0,0,0,100,100,0,0,1,2,0,2,30,30,30,1
-
-    [Events]
-    Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-    """
-            
-            ass_events = ""
-            
-            # Parse SRT entries
-            import re
-            srt_blocks = srt_content.strip().split('\n\n')
-            
-            for block in srt_blocks:
-                lines = block.strip().split('\n')
-                if len(lines) >= 3:
-                    try:
-                        # Parse timing
-                        timing_line = lines[1]
-                        if '-->' in timing_line:
-                            start_time, end_time = timing_line.split(' --> ')
-                            
-                            # Convert SRT time to ASS time format
-                            start_ass = self.srt_time_to_ass_time(start_time.strip())
-                            end_ass = self.srt_time_to_ass_time(end_time.strip())
-                            
-                            # Get text (join multiple lines)
-                            text = ' '.join(lines[2:]).strip()
-                            
-                            # Create ASS event
-                            ass_events += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n"
-                    
-                    except Exception:
-                        continue  # Skip malformed entries
-            
-            return ass_header + ass_events
-            
-        except Exception as e:
-            self.add_log("ERROR", f"❌ SRT to ASS conversion error: {str(e)}")
-            return ""
-
-    def srt_time_to_ass_time(self, srt_time: str) -> str:
-        """Convert SRT timestamp to ASS timestamp format"""
-        try:
-            # SRT: 00:01:23,456 -> ASS: 0:01:23.46
-            srt_time = srt_time.replace(',', '.')
-            # Remove leading zero from hours if present
-            if srt_time.startswith('0'):
-                srt_time = srt_time[1:]
-            return srt_time[:9]  # Trim to ASS format
-        except:
-            return "0:00:00.00"
-
-    def extract_first_subtitle_text(self, srt_content: str) -> str:
-        """Extract text from first subtitle entry for fallback"""
-        try:
-            blocks = srt_content.strip().split('\n\n')
-            if blocks:
-                lines = blocks[0].strip().split('\n')
-                if len(lines) >= 3:
-                    return ' '.join(lines[2:]).strip()
-            return "Subtitle text"
-        except:
-            return "Subtitle text"
-
-
-    def add_subtitles_original_method(self, input_video: str, srt_file: str, output_video: str) -> bool:
-        """
-        🔥 FALLBACK: Original subtitles method as last resort
-        """
-        try:
-            self.add_log("INFO", "🆘 Using original subtitle method as final fallback...")
-            
-            # FFmpeg path
-            ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "bin", "ffmpeg.exe")
-            
-            if not os.path.exists(ffmpeg_path):
-                import shutil
-                system_ffmpeg = shutil.which("ffmpeg")
-                if system_ffmpeg:
-                    ffmpeg_path = system_ffmpeg
-                else:
-                    self.add_log("ERROR", "❌ FFmpeg not found for fallback")
-                    return False
-            
-            # Copy SRT to video directory for path safety
-            video_dir = os.path.dirname(input_video)
-            local_srt = os.path.join(video_dir, "temp_subtitle_fallback.srt")
-            
-            import shutil
-            shutil.copy2(srt_file, local_srt)
-            
-            self.add_log("INFO", f"📁 Copied SRT to: {local_srt}")
-            
-            # Basic subtitle command without styling
-            cmd_fallback = [
-                ffmpeg_path,
-                "-y",
-                "-i", input_video,
-                "-vf", "subtitles=temp_subtitle_fallback.srt",
-                "-c:a", "copy",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                output_video
-            ]
-            
-            self.add_log("INFO", "🔧 Fallback command: Basic subtitles without custom positioning")
-            
-            # Change to video directory
-            original_cwd = os.getcwd()
-            os.chdir(video_dir)
-            
-            result = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=600)
-            
-            # Restore directory
-            os.chdir(original_cwd)
-            
-            # Cleanup temp file
-            try:
-                os.remove(local_srt)
-                self.add_log("INFO", "🧹 Cleaned up temporary SRT file")
-            except:
-                pass
-            
-            # Check result
-            if result.returncode == 0:
-                if os.path.exists(output_video) and os.path.getsize(output_video) > 1000:
-                    self.add_log("WARNING", "✅ Fallback method succeeded!")
-                    self.add_log("WARNING", "   ⚠️ Using basic SRT positioning (not GUI scaled)")
-                    self.add_log("WARNING", "   💡 Consider checking SRT format or FFmpeg version")
-                    return True
-                else:
-                    self.add_log("ERROR", "❌ Fallback: Output file not created properly")
-            else:
-                self.add_log("ERROR", f"❌ Fallback failed with error code: {result.returncode}")
-                self.add_log("ERROR", f"   📋 STDERR: {result.stderr[:300]}")
-                if result.stdout:
-                    self.add_log("ERROR", f"   📋 STDOUT: {result.stdout[:200]}")
-            
-            return False
-                
-        except Exception as e:
-            self.add_log("ERROR", f"❌ Fallback method critical error: {str(e)}")
-            import traceback
-            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
-            return False
-        
     def get_validated_api_key(self) -> str:
         """
         🔥 SỬA LẠI: Validate API key với debug chi tiết
@@ -993,106 +828,48 @@ class VideoEditorMainWindow(QMainWindow):
 
     def create_srt_file_from_content(self, srt_content: str, output_path: str) -> bool:
         """
-        🔥 NEW: Create SRT file with proper UTF-8 encoding for all languages
+        🔥 UPDATED: Create SRT với COMPLETE timestamp fixing + validation
         """
         try:
-            self.add_log("INFO", f"📄 Creating SRT file: {os.path.basename(output_path)}")
+            self.add_log("INFO", f"📄 Creating SRT with COMPLETE fixes...")
+            
+            # 🔥 FIXED: Gọi hàm fix hoàn toàn mới
+            fixed_content = fix_srt_timestamps(srt_content, self.add_log)
             
             # Ensure directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Write SRT content with UTF-8 encoding
+            # Write fixed content
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(srt_content)
+                f.write(fixed_content)
             
-            # Validate file creation
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
-                self.add_log("SUCCESS", f"✅ SRT file created: {file_size} bytes")
                 
-                # Count subtitle entries for validation
-                entry_count = srt_content.count('\n\n') + 1 if srt_content.strip() else 0
-                self.add_log("INFO", f"   📝 Contains ~{entry_count} subtitle entries")
+                # Count blocks để report
+                blocks = fixed_content.strip().split('\n\n')
+                valid_blocks = [b for b in blocks if b.strip()]
+                
+                self.add_log("SUCCESS", f"✅ SRT file created: {file_size} bytes, {len(valid_blocks)} subtitle blocks")
+                
+                # Show preview của first 2 blocks
+                self.add_log("INFO", "📋 Final SRT preview:")
+                for i, block in enumerate(valid_blocks[:2]):
+                    lines = block.strip().split('\n')
+                    for j, line in enumerate(lines):
+                        self.add_log("INFO", f"   {i+1}.{j+1}: {line}")
+                    if i < len(valid_blocks) - 1:
+                        self.add_log("INFO", "   ...")
                 
                 return True
             else:
-                self.add_log("ERROR", "❌ SRT file was not created")
+                self.add_log("ERROR", "❌ Failed to create SRT file")
                 return False
                 
         except Exception as e:
-            self.add_log("ERROR", f"❌ Error creating SRT file: {str(e)}")
+            self.add_log("ERROR", f"❌ Error creating SRT: {str(e)}")
             return False
-
-    def test_ffmpeg_subtitle_capability(self, video_path: str) -> bool:
-        """
-        🔥 NEW: Quick test để xem FFmpeg có thể xử lý subtitle không
-        """
-        try:
-            ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "bin", "ffmpeg.exe")
-            
-            if not os.path.exists(ffmpeg_path):
-                import shutil
-                system_ffmpeg = shutil.which("ffmpeg")
-                if system_ffmpeg:
-                    ffmpeg_path = system_ffmpeg
-                else:
-                    return False
-            
-            # Test với command đơn giản nhất: chỉ copy 1 giây video
-            import tempfile
-            
-            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
-                test_output = tmp.name
-            
-            test_cmd = [
-                ffmpeg_path,
-                "-y",
-                "-i", video_path,
-                "-t", "1",  # Chỉ 1 giây
-                "-c", "copy",  # Copy streams, no processing
-                test_output
-            ]
-            
-            result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=15)
-            
-            # Cleanup
-            try:
-                os.remove(test_output)
-            except:
-                pass
-            
-            if result.returncode == 0:
-                self.add_log("SUCCESS", "✅ FFmpeg basic functionality confirmed")
-                return True
-            else:
-                self.add_log("WARNING", f"⚠️ FFmpeg basic test failed: {result.returncode}")
-                return False
-                
-        except Exception as test_error:
-            self.add_log("WARNING", f"⚠️ FFmpeg test exception: {str(test_error)}")
-            return False
-
-    # ✅ ĐỒNG THỜI THÊM HÀM create_srt_file_from_content() đơn giản:
-
-    def create_srt_file_from_content(self, srt_content: str, output_path: str) -> bool:
-        """Create SRT file with proper UTF-8 encoding"""
-        try:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(srt_content)
-            
-            if os.path.exists(output_path):
-                self.add_log("SUCCESS", f"✅ SRT file created: {os.path.basename(output_path)}")
-                return True
-            else:
-                return False
-                
-        except Exception as e:
-            self.add_log("ERROR", f"❌ Error creating SRT file: {str(e)}")
-            return False
-
-
+    
     def process_subtitles_for_video(self, video_path: str, output_dir: str) -> Tuple[bool, str]:
         """
         🔥 FIXED: Xử lý subtitle với validation và error handling tốt hơn
@@ -1254,35 +1031,7 @@ class VideoEditorMainWindow(QMainWindow):
             self.add_log("ERROR", f"   📋 Full traceback: {traceback.format_exc()}")
             return False, ""
 
-    def debug_preview_sync(self):
-        """🔥 DEBUG: Kiểm tra đồng bộ giữa GUI và preview"""
-        if not hasattr(self, 'video_preview'):
-            return
-        
-        # Lấy giá trị từ GUI
-        gui_banner_x = self.banner_x.value()
-        gui_banner_y = self.banner_y.value()
-        gui_height_ratio = self.banner_height_ratio.value()
-        
-        # Tính toán kích thước thực tế
-        real_banner_height = int(1920 * gui_height_ratio)
-        real_banner_width = int(real_banner_height * 16/9)
-        
-        # Tính preview coordinates
-        scale_x = 270 / 1080
-        scale_y = 480 / 1920
-        preview_x = int(gui_banner_x * scale_x)
-        preview_y = int(gui_banner_y * scale_y)
-        preview_width = int(real_banner_width * scale_x)
-        preview_height = int(real_banner_height * scale_y)
-        
-        self.add_log("DEBUG", "🔍 PREVIEW SYNC CHECK:")
-        self.add_log("DEBUG", f"   GUI Values: X={gui_banner_x}, Y={gui_banner_y}, Ratio={gui_height_ratio}")
-        self.add_log("DEBUG", f"   Real Size: {real_banner_width}x{real_banner_height}")
-        self.add_log("DEBUG", f"   Preview Pos: ({preview_x}, {preview_y})")
-        self.add_log("DEBUG", f"   Preview Size: {preview_width}x{preview_height}")
-        self.add_log("DEBUG", f"   Scale Factors: {scale_x:.3f}, {scale_y:.3f}")
-
+    
     def setup_defaults(self):
         """🔥 FIXED: Thiết lập giá trị mặc định chính xác với GUI sync test"""
         try:
