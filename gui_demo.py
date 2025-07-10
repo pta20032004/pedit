@@ -357,88 +357,7 @@ class VideoEditorMainWindow(QMainWindow):
         QApplication.processEvents()  # Để UI load xong trước
         self.check_ffmpeg_installation()
     
-    def parse_srt_for_drawtext(self, srt_file: str) -> list:
-        """
-        🔥 NEW: Parse SRT file để tạo drawtext entries với timing chính xác
-        """
-        try:
-            import re
-            
-            # Read SRT file
-            with open(srt_file, 'r', encoding='utf-8') as f:
-                srt_content = f.read()
-            
-            entries = []
-            blocks = srt_content.strip().split('\n\n')
-            
-            self.add_log("INFO", f"🔍 Parsing SRT: Found {len(blocks)} subtitle blocks")
-            
-            for block_num, block in enumerate(blocks, 1):
-                lines = block.strip().split('\n')
-                
-                if len(lines) >= 3:
-                    try:
-                        # Line 0: subtitle number (ignore)
-                        # Line 1: timing
-                        # Line 2+: text content
-                        
-                        timing_line = lines[1].strip()
-                        text_lines = lines[2:]
-                        text = ' '.join(text_lines).strip()  # Join multiple text lines
-                        
-                        # Parse timing: 00:00:10,500 --> 00:00:13,240
-                        time_pattern = r'(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})'
-                        time_match = re.match(time_pattern, timing_line)
-                        
-                        if time_match:
-                            # Extract time components
-                            start_h, start_m, start_s, start_ms = map(int, time_match.groups()[:4])
-                            end_h, end_m, end_s, end_ms = map(int, time_match.groups()[4:])
-                            
-                            # Convert to seconds
-                            start_seconds = start_h * 3600 + start_m * 60 + start_s + start_ms / 1000.0
-                            end_seconds = end_h * 3600 + end_m * 60 + end_s + end_ms / 1000.0
-                            
-                            # Validate timing
-                            if start_seconds < end_seconds and text:
-                                entries.append({
-                                    'text': text,
-                                    'start_seconds': start_seconds,
-                                    'end_seconds': end_seconds,
-                                    'block_number': block_num
-                                })
-                                
-                                self.add_log("DEBUG", f"   ✅ Block {block_num}: {start_seconds:.1f}s-{end_seconds:.1f}s: {text[:50]}...")
-                            else:
-                                self.add_log("WARNING", f"   ⚠️ Block {block_num}: Invalid timing or empty text")
-                        else:
-                            self.add_log("WARNING", f"   ⚠️ Block {block_num}: Cannot parse timing: {timing_line}")
-                            
-                    except Exception as block_error:
-                        self.add_log("WARNING", f"   ⚠️ Block {block_num}: Parse error: {str(block_error)}")
-                        continue
-                else:
-                    self.add_log("WARNING", f"   ⚠️ Block {block_num}: Insufficient lines ({len(lines)})")
-            
-            self.add_log("SUCCESS", f"✅ SRT parsing complete: {len(entries)} valid entries")
-            
-            if len(entries) == 0:
-                self.add_log("ERROR", "❌ No valid subtitle entries found!")
-                return []
-            
-            # Sort by start time to ensure correct order
-            entries.sort(key=lambda x: x['start_seconds'])
-            
-            return entries
-            
-        except Exception as e:
-            self.add_log("ERROR", f"❌ SRT parsing error: {str(e)}")
-            import traceback
-            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
-            return []
-
-
-
+    
     def wrap_text_for_safe_display(self, text: str, max_chars_per_line: int) -> str:
         """🔥 SIMPLE: Wrap text để fit TikTok safe area"""
         try:
@@ -544,22 +463,14 @@ class VideoEditorMainWindow(QMainWindow):
 
     def add_subtitles_to_video(self, input_video: str, srt_file: str, output_video: str) -> bool:
         """
-        🔥 FIXED: TikTok-safe subtitles với FORCED boundaries - NO OVERFLOW
+        🔥 FIXED: Sử dụng FFmpeg để add subtitle vào video - với safe attribute access
         """
         try:
-            # Validate input files
-            if not os.path.exists(input_video):
-                self.add_log("ERROR", f"❌ Input video not found: {input_video}")
-                return False
-                
-            if not os.path.exists(srt_file):
-                self.add_log("ERROR", f"❌ SRT file not found: {srt_file}")
-                return False
-            
-            # FFmpeg path detection
+            # Đường dẫn FFmpeg
             ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "bin", "ffmpeg.exe")
             
             if not os.path.exists(ffmpeg_path):
+                # Thử sử dụng system ffmpeg
                 import shutil
                 system_ffmpeg = shutil.which("ffmpeg")
                 if system_ffmpeg:
@@ -568,169 +479,135 @@ class VideoEditorMainWindow(QMainWindow):
                     self.add_log("ERROR", "❌ FFmpeg executable not found")
                     return False
             
-            # Get video dimensions
-            video_width, video_height = self.get_video_dimensions(input_video)
-            if not video_width or not video_height:
-                self.add_log("ERROR", f"❌ Cannot get video dimensions")
-                return False
-            
-            # GUI settings
-            font_size = self.subtitle_size.value()
-            subtitle_y = self.subtitle_y.value()
-            subtitle_style = self.subtitle_style.currentText()
-            
-            self.add_log("INFO", f"🔍 SAFE Subtitle Settings:")
-            self.add_log("INFO", f"   🔤 Font Size: {font_size}px")
-            self.add_log("INFO", f"   📍 Position: SAFE BOUNDARIES + Y={subtitle_y}")
-            self.add_log("INFO", f"🎬 Target Video: {video_width}x{video_height}")
-            
-            # 🔥 CALCULATE SAFE BOUNDARIES - UNIVERSAL for all video sizes
-            BASE_LEFT_MARGIN = 100   # Minimum safe left margin
-            BASE_RIGHT_MARGIN = 140  # Minimum safe right margin
-            
-            # Scale margins based on video width
-            REFERENCE_WIDTH = 1080
-            width_scale = video_width / REFERENCE_WIDTH
-            height_scale = video_height / 1920
-            
-            # Calculate actual safe margins
-            left_margin = max(50, int(BASE_LEFT_MARGIN * width_scale))
-            right_margin = max(60, int(BASE_RIGHT_MARGIN * width_scale))
-            
-            # 🔥 ENSURE MINIMUM 25% OF WIDTH IS RESERVED FOR MARGINS
-            min_total_margin = int(video_width * 0.25)
-            current_total = left_margin + right_margin
-            
-            if current_total < min_total_margin:
-                deficit = min_total_margin - current_total
-                left_margin += int(deficit * 0.4)   # 40% to left
-                right_margin += int(deficit * 0.6)  # 60% to right
-            
-            # Calculate GUARANTEED safe text area
-            safe_text_width = video_width - left_margin - right_margin
-            safe_start_x = left_margin
-            
-            # Font size scaling
-            scaled_font_size = max(12, int(font_size * min(width_scale, height_scale)))
-            
-            # Y position scaling
-            scaled_y = int(subtitle_y * height_scale)
-            max_y = video_height - 100
-            final_y = max(30, min(scaled_y, max_y))
-            
-            self.add_log("SUCCESS", f"🔒 GUARANTEED SAFE BOUNDARIES:")
-            self.add_log("INFO", f"   📐 Video: {video_width}x{video_height}")
-            self.add_log("INFO", f"   🔒 Safe margins: L={left_margin}px, R={right_margin}px")
-            self.add_log("INFO", f"   📝 Text area: {safe_text_width}px ({(safe_text_width/video_width)*100:.1f}%)")
-            self.add_log("INFO", f"   🔤 Font: {font_size}px → {scaled_font_size}px")
-            
-            # Color settings
-            if subtitle_style == "White with Shadow":
-                fontcolor = "white"
-                shadowcolor = "black"
-                shadowx = "2"
-                shadowy = "2"
-                borderw = "2"
-                bordercolor = "black"
-            elif subtitle_style == "Black with White Outline":
-                fontcolor = "black"
-                shadowcolor = "white" 
-                shadowx = "0"
-                shadowy = "0"
-                borderw = "3"
-                bordercolor = "white"
-            elif subtitle_style == "Yellow":
-                fontcolor = "yellow"
-                shadowcolor = "black"
-                shadowx = "1"
-                shadowy = "1"
-                borderw = "2"
-                bordercolor = "black"
-            else:
-                fontcolor = "white"
-                shadowcolor = "black"
-                shadowx = "1"
-                shadowy = "1"
-                borderw = "2"
-                bordercolor = "black"
-            
-            # Parse SRT for drawtext entries
-            subtitle_entries = self.parse_srt_for_drawtext(srt_file)
-            
-            if not subtitle_entries:
-                self.add_log("ERROR", "❌ No valid subtitle entries found in SRT")
-                return False
-            
-            self.add_log("INFO", f"📝 Processing {len(subtitle_entries)} subtitle entries")
-            
-            # 🔥 BUILD: SAFE drawtext filters với GUARANTEED no-overflow formula
-            drawtext_filters = []
-            
-            for i, entry in enumerate(subtitle_entries):
-                start_time = entry['start_seconds']
-                end_time = entry['end_seconds']
-                text = entry['text'].replace("'", "\\'").replace(":", "\\:")
+            # 🔥 SAFE: Lấy settings subtitle từ GUI với fallback defaults
+            try:
+                font_size = self.subtitle_size.value() if hasattr(self, 'subtitle_size') else 40
+            except:
+                font_size = 40
                 
-                # 🔥 SAFE FORMULA: NEVER overflow boundaries
-                # Method: Use safe_start_x + center within safe area, but with max() to prevent negative
-                drawtext_filter = (
-                    f"drawtext="
-                    f"fontfile='C\\:/Windows/Fonts/arial.ttf':"
-                    f"text='{text}':"
-                    f"fontsize={scaled_font_size}:"
-                    f"fontcolor={fontcolor}:"
-                    f"x=max({safe_start_x}, min({safe_start_x}+(({safe_text_width}-text_w)/2), {video_width-right_margin}-text_w)):"  # 🔥 SAFE BOUNDARY FORMULA
-                    f"y={final_y}:"
-                    f"shadowcolor={shadowcolor}:"
-                    f"shadowx={shadowx}:"
-                    f"shadowy={shadowy}:"
-                    f"borderw={borderw}:"
-                    f"bordercolor={bordercolor}:"
-                    f"enable='between(t,{start_time},{end_time})'"
-                )
-                drawtext_filters.append(drawtext_filter)
+            try:
+                subtitle_style = self.subtitle_style.currentText() if hasattr(self, 'subtitle_style') else "White with Shadow"
+            except:
+                subtitle_style = "White with Shadow"
             
-            # Combine all drawtext filters
-            complete_filter = ",".join(drawtext_filters)
+            # 🔥 CENTER SUBTITLE: Sử dụng giá trị center mặc định
+            subtitle_x = 540  # Center của 1080px width
+            subtitle_y = 1600  # Vị trí bottom cho 1920px height
             
-            self.add_log("SUCCESS", f"🛡️ OVERFLOW-PROOF Drawtext Filter Built:")
-            self.add_log("INFO", f"   🔒 Formula: max({safe_start_x}, min(center, max_right))")
-            self.add_log("INFO", f"   📝 Guaranteed within bounds: {safe_start_x} to {video_width-right_margin}")
+            self.add_log("INFO", f"🎨 Subtitle settings: Size={font_size}px, Style={subtitle_style}")
+            self.add_log("INFO", f"📍 Subtitle position: Center (X={subtitle_x}, Y={subtitle_y})")
             
-            # Execute FFmpeg with safe drawtext
-            cmd_safe = [
+            # Xây dựng filter cho subtitle
+            subtitle_filter = self.build_subtitle_filter(srt_file, font_size, subtitle_x, subtitle_y, subtitle_style)
+            
+            # FFmpeg command
+            cmd = [
                 ffmpeg_path,
-                "-y",
                 "-i", input_video,
-                "-vf", complete_filter,
-                "-c:a", "copy",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
+                "-vf", subtitle_filter,
+                "-c:a", "copy",  # Copy audio stream
+                "-y",  # Overwrite output
                 output_video
             ]
             
-            self.add_log("INFO", "🚀 Executing OVERFLOW-PROOF subtitle processing...")
+            self.add_log("INFO", f"🔧 FFmpeg subtitle command: {' '.join(cmd[:3])}...")
             
-            result = subprocess.run(cmd_safe, capture_output=True, text=True, timeout=600)
+            # Chạy FFmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # 10 minutes timeout
             
             if result.returncode == 0:
                 if os.path.exists(output_video) and os.path.getsize(output_video) > 1000:
-                    self.add_log("SUCCESS", f"✅ SAFE SUBTITLES SUCCESS - NO OVERFLOW GUARANTEED!")
-                    self.add_log("SUCCESS", f"   🛡️ Text bounded within {safe_text_width}px safe area")
-                    self.add_log("SUCCESS", f"   📱 Compatible with all screen sizes and TikTok UI")
+                    self.add_log("SUCCESS", "✅ Subtitles added successfully!")
                     return True
                 else:
-                    self.add_log("ERROR", "❌ Output file creation issue")
+                    self.add_log("ERROR", "❌ Output video not created or too small")
+                    return False
             else:
-                self.add_log("ERROR", f"❌ Safe subtitle processing failed:")
-                self.add_log("ERROR", f"   📋 Error: {result.stderr[:500]}")
-            
+                self.add_log("ERROR", f"❌ FFmpeg subtitle error: {result.stderr[:200]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.add_log("ERROR", "❌ FFmpeg subtitle timeout (>10 minutes)")
             return False
+        except Exception as e:
+            self.add_log("ERROR", f"❌ Subtitle addition error: {str(e)}")
+            return False
+
+    
+    def convert_srt_to_ass(self, srt_content: str) -> str:
+        """
+        🔥 NEW: Convert SRT content to basic ASS format for better FFmpeg compatibility
+        """
+        try:
+            ass_header = """[Script Info]
+    Title: Auto-generated ASS
+    ScriptType: v4.00+
+
+    [V4+ Styles]
+    Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+    Style: Default,Arial,40,&Hffffff,&Hffffff,&H0,&H0,0,0,0,0,100,100,0,0,1,2,0,2,30,30,30,1
+
+    [Events]
+    Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+    """
+            
+            ass_events = ""
+            
+            # Parse SRT entries
+            import re
+            srt_blocks = srt_content.strip().split('\n\n')
+            
+            for block in srt_blocks:
+                lines = block.strip().split('\n')
+                if len(lines) >= 3:
+                    try:
+                        # Parse timing
+                        timing_line = lines[1]
+                        if '-->' in timing_line:
+                            start_time, end_time = timing_line.split(' --> ')
+                            
+                            # Convert SRT time to ASS time format
+                            start_ass = self.srt_time_to_ass_time(start_time.strip())
+                            end_ass = self.srt_time_to_ass_time(end_time.strip())
+                            
+                            # Get text (join multiple lines)
+                            text = ' '.join(lines[2:]).strip()
+                            
+                            # Create ASS event
+                            ass_events += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n"
+                    
+                    except Exception:
+                        continue  # Skip malformed entries
+            
+            return ass_header + ass_events
             
         except Exception as e:
-            self.add_log("ERROR", f"❌ Critical error in safe subtitle processing: {str(e)}")
-            return False
+            self.add_log("ERROR", f"❌ SRT to ASS conversion error: {str(e)}")
+            return ""
+
+    def srt_time_to_ass_time(self, srt_time: str) -> str:
+        """Convert SRT timestamp to ASS timestamp format"""
+        try:
+            # SRT: 00:01:23,456 -> ASS: 0:01:23.46
+            srt_time = srt_time.replace(',', '.')
+            # Remove leading zero from hours if present
+            if srt_time.startswith('0'):
+                srt_time = srt_time[1:]
+            return srt_time[:9]  # Trim to ASS format
+        except:
+            return "0:00:00.00"
+
+    def extract_first_subtitle_text(self, srt_content: str) -> str:
+        """Extract text from first subtitle entry for fallback"""
+        try:
+            blocks = srt_content.strip().split('\n\n')
+            if blocks:
+                lines = blocks[0].strip().split('\n')
+                if len(lines) >= 3:
+                    return ' '.join(lines[2:]).strip()
+            return "Subtitle text"
+        except:
+            return "Subtitle text"
 
 
     def add_subtitles_original_method(self, input_video: str, srt_file: str, output_video: str) -> bool:
@@ -854,152 +731,34 @@ class VideoEditorMainWindow(QMainWindow):
         self.add_log("SUCCESS", f"✅ [API DEBUG] API key validated: {api_key[:10]}...{api_key[-4:]}")
         return api_key
 
-    def build_subtitle_filter(self, srt_file: str, font_size: int, pos_y: int, style: str, video_width: int = 1080, video_height: int = 1920) -> str:
+    def build_subtitle_filter(self, srt_file: str, font_size: int, pos_x: int, pos_y: int, style: str) -> str:
         """
-        🔥 FIXED: Build subtitle filter với GUARANTEED safe margins
+        🔥 FIXED: Xây dựng filter string cho FFmpeg subtitle với center positioning
         """
         try:
-            # Path escaping
-            escaped_srt = srt_file.replace('\\', '/').replace("'", "\\'")
+            # Escape đường dẫn SRT file cho FFmpeg
+            escaped_srt = srt_file.replace('\\', '/').replace(':', '\\:')
             
-            # Reference dimensions
-            REFERENCE_WIDTH = 1080
-            REFERENCE_HEIGHT = 1920
+            # 🔥 SIMPLE APPROACH: Chỉ dùng subtitles filter cơ bản
+            subtitle_filter = f"subtitles='{escaped_srt}'"
             
-            width_scale = video_width / REFERENCE_WIDTH
-            height_scale = video_height / REFERENCE_HEIGHT
-            effective_scale = min(width_scale, height_scale)
-            
-            # Font size scaling with minimum bounds
-            scaled_font_size = max(12, min(int(font_size * effective_scale), 80))
-            
-            # Y position scaling
-            scaled_y = max(50, int(pos_y * height_scale))
-            max_y = max(50, video_height - 150)
-            scaled_y = min(scaled_y, max_y)
-            
-            # 🔥 GUARANTEED SAFE MARGINS - NO OVERFLOW POSSIBLE
-            BASE_LEFT_MARGIN = 120   # Increased for extra safety
-            BASE_RIGHT_MARGIN = 160  # Increased for extra safety
-            
-            # Scale margins with minimum enforced values
-            left_margin = max(60, int(BASE_LEFT_MARGIN * width_scale))
-            right_margin = max(80, int(BASE_RIGHT_MARGIN * width_scale))
-            
-            # 🔥 FORCE MINIMUM 30% OF WIDTH FOR MARGINS (increased from 25%)
-            min_safe_percentage = 0.30
-            min_total_margin = int(video_width * min_safe_percentage)
-            
-            if (left_margin + right_margin) < min_total_margin:
-                deficit = min_total_margin - left_margin - right_margin
-                left_margin += int(deficit * 0.4)
-                right_margin += int(deficit * 0.6)
-            
-            # Calculate final safe text area
-            safe_text_width = video_width - left_margin - right_margin
-            text_width_percentage = (safe_text_width / video_width) * 100
-            
-            # Vertical margins
-            margin_v = max(20, int(40 * height_scale))
-            
-            # 🔥 BUILD FILTER WITH FORCED SAFE MARGINS AND WRAPPING
-            style_parts = [
-                f"FontSize={scaled_font_size}",
-                f"MarginV={margin_v}",
-                f"MarginL={left_margin}",      # 🔥 FORCED safe left margin
-                f"MarginR={right_margin}",     # 🔥 FORCED safe right margin
-                "Alignment=2",                 # Center bottom
-                "WrapStyle=1",                 # 🔥 ENABLE word wrapping
-                f"PlayResX={video_width}",     # Set resolution for accurate positioning
-                f"PlayResY={video_height}",
-                "ScaleX=100",                  # Prevent text scaling beyond bounds
-                "ScaleY=100"
-            ]
-            
-            # Style-specific settings
+            # 🔥 BASIC STYLING: Đơn giản hóa để tránh lỗi
             if style == "White with Shadow":
-                style_parts.extend([
-                    "PrimaryColour=&Hffffff",
-                    "OutlineColour=&H000000", 
-                    "Outline=2",
-                    "Shadow=2"
-                ])
+                subtitle_filter += f":force_style='FontSize={font_size},Alignment=2,MarginV=50'"
             elif style == "Black with White Outline":
-                style_parts.extend([
-                    "PrimaryColour=&H000000",
-                    "OutlineColour=&Hffffff",
-                    "Outline=3",
-                    "Shadow=0"
-                ])
+                subtitle_filter += f":force_style='FontSize={font_size},Alignment=2,MarginV=50,PrimaryColour=&H000000,OutlineColour=&Hffffff'"
             elif style == "Yellow":
-                style_parts.extend([
-                    "PrimaryColour=&H00ffff",
-                    "OutlineColour=&H000000",
-                    "Outline=2",
-                    "Shadow=1"
-                ])
-            else:
-                style_parts.extend([
-                    "PrimaryColour=&Hffffff",
-                    "OutlineColour=&H000000",
-                    "Outline=2"
-                ])
+                subtitle_filter += f":force_style='FontSize={font_size},Alignment=2,MarginV=50,PrimaryColour=&H00ffff'"
+            else:  # Default
+                subtitle_filter += f":force_style='FontSize={font_size},Alignment=2,MarginV=50'"
             
-            style_string = ",".join(style_parts)
-            subtitle_filter = f"subtitles='{escaped_srt}':force_style='{style_string}'"
-            
-            self.add_log("SUCCESS", f"🛡️ OVERFLOW-PROOF subtitle filter created:")
-            self.add_log("INFO", f"   📐 Video: {video_width}x{video_height}")
-            self.add_log("INFO", f"   🔒 SAFE margins: L={left_margin}px ({left_margin/video_width*100:.1f}%), R={right_margin}px ({right_margin/video_width*100:.1f}%)")
-            self.add_log("INFO", f"   📝 Text area: {safe_text_width}px ({text_width_percentage:.1f}% - GUARANTEED SAFE)")
-            self.add_log("INFO", f"   📝 Word wrapping: ENABLED")
-            
+            self.add_log("INFO", f"🎨 Subtitle filter: {subtitle_filter[:100]}...")
             return subtitle_filter
             
         except Exception as e:
-            self.add_log("ERROR", f"❌ Error building safe subtitle filter: {str(e)}")
-            basic_srt = srt_file.replace('\\', '/')
-            return f"subtitles='{basic_srt}'"
-
-    # def debug_subtitle_positioning(self, video_width: int, video_height: int):
-    #     """Debug function để kiểm tra positioning calculations"""
-        
-    #     REFERENCE_WIDTH = 1080
-    #     REFERENCE_HEIGHT = 1920
-    #     BASE_LEFT_MARGIN = 100
-    #     BASE_RIGHT_MARGIN = 140
-        
-    #     width_scale = video_width / REFERENCE_WIDTH
-    #     height_scale = video_height / REFERENCE_HEIGHT
-        
-    #     left_margin = max(30, int(BASE_LEFT_MARGIN * width_scale))
-    #     right_margin = max(40, int(BASE_RIGHT_MARGIN * width_scale))
-        
-    #     # Apply minimum margins
-    #     min_total_margin = int(video_width * 0.22)
-    #     if (left_margin + right_margin) < min_total_margin:
-    #         deficit = min_total_margin - left_margin - right_margin
-    #         left_margin += int(deficit * 0.4)
-    #         right_margin += int(deficit * 0.6)
-        
-    #     text_area_width = video_width - left_margin - right_margin
-        
-    #     self.add_log("DEBUG", "🔍 SUBTITLE POSITIONING DEBUG:")
-    #     self.add_log("DEBUG", f"   📐 Video: {video_width}x{video_height}")
-    #     self.add_log("DEBUG", f"   📏 Scale: {width_scale:.3f}x, {height_scale:.3f}x")
-    #     self.add_log("DEBUG", f"   🔒 Margins: L={left_margin}px, R={right_margin}px")
-    #     self.add_log("DEBUG", f"   📝 Text area: {text_area_width}px")
-    #     self.add_log("DEBUG", f"   📊 Safe %: {(text_area_width/video_width)*100:.1f}% of video width")
-    #     self.add_log("DEBUG", f"   📍 Text starts at: {left_margin}px")
-    #     self.add_log("DEBUG", f"   📍 Text ends at: {video_width - right_margin}px")
-        
-    #     return {
-    #         "left_margin": left_margin,
-    #         "right_margin": right_margin,
-    #         "text_area_width": text_area_width,
-    #         "text_start_x": left_margin,
-    #         "text_end_x": video_width - right_margin
-    #     }
+            self.add_log("ERROR", f"❌ Error building subtitle filter: {str(e)}")
+            # 🔥 ULTIMATE FALLBACK: Chỉ dùng subtitles filter thuần
+            return f"subtitles='{escaped_srt}'"
 
     def add_subtitles_to_video_centered(self, input_video: str, srt_file: str, output_video: str) -> bool:
         """🔥 FIXED: Handle special characters + correct FFmpeg syntax - 3 fallback methods"""
@@ -1231,157 +990,269 @@ class VideoEditorMainWindow(QMainWindow):
             self.add_log("ERROR", f"❌ Critical error in subtitle processing: {str(e)}")
             return False
 
-    def process_subtitles_for_video(self, video_path: str, output_dir: str) -> Tuple[bool, str]:
+
+    def create_srt_file_from_content(self, srt_content: str, output_path: str) -> bool:
         """
-        🔥 FIXED: Xử lý subtitle với auto-center và universal video dimension support
+        🔥 NEW: Create SRT file with proper UTF-8 encoding for all languages
         """
         try:
-            # [Previous validation code unchanged...]
+            self.add_log("INFO", f"📄 Creating SRT file: {os.path.basename(output_path)}")
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Write SRT content with UTF-8 encoding
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            # Validate file creation
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                self.add_log("SUCCESS", f"✅ SRT file created: {file_size} bytes")
+                
+                # Count subtitle entries for validation
+                entry_count = srt_content.count('\n\n') + 1 if srt_content.strip() else 0
+                self.add_log("INFO", f"   📝 Contains ~{entry_count} subtitle entries")
+                
+                return True
+            else:
+                self.add_log("ERROR", "❌ SRT file was not created")
+                return False
+                
+        except Exception as e:
+            self.add_log("ERROR", f"❌ Error creating SRT file: {str(e)}")
+            return False
+
+    def test_ffmpeg_subtitle_capability(self, video_path: str) -> bool:
+        """
+        🔥 NEW: Quick test để xem FFmpeg có thể xử lý subtitle không
+        """
+        try:
+            ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "bin", "ffmpeg.exe")
+            
+            if not os.path.exists(ffmpeg_path):
+                import shutil
+                system_ffmpeg = shutil.which("ffmpeg")
+                if system_ffmpeg:
+                    ffmpeg_path = system_ffmpeg
+                else:
+                    return False
+            
+            # Test với command đơn giản nhất: chỉ copy 1 giây video
+            import tempfile
+            
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
+                test_output = tmp.name
+            
+            test_cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i", video_path,
+                "-t", "1",  # Chỉ 1 giây
+                "-c", "copy",  # Copy streams, no processing
+                test_output
+            ]
+            
+            result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=15)
+            
+            # Cleanup
+            try:
+                os.remove(test_output)
+            except:
+                pass
+            
+            if result.returncode == 0:
+                self.add_log("SUCCESS", "✅ FFmpeg basic functionality confirmed")
+                return True
+            else:
+                self.add_log("WARNING", f"⚠️ FFmpeg basic test failed: {result.returncode}")
+                return False
+                
+        except Exception as test_error:
+            self.add_log("WARNING", f"⚠️ FFmpeg test exception: {str(test_error)}")
+            return False
+
+    # ✅ ĐỒNG THỜI THÊM HÀM create_srt_file_from_content() đơn giản:
+
+    def create_srt_file_from_content(self, srt_content: str, output_path: str) -> bool:
+        """Create SRT file with proper UTF-8 encoding"""
+        try:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            if os.path.exists(output_path):
+                self.add_log("SUCCESS", f"✅ SRT file created: {os.path.basename(output_path)}")
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            self.add_log("ERROR", f"❌ Error creating SRT file: {str(e)}")
+            return False
+
+
+    def process_subtitles_for_video(self, video_path: str, output_dir: str) -> Tuple[bool, str]:
+        """
+        🔥 FIXED: Xử lý subtitle với validation và error handling tốt hơn
+        """
+        try:
+            # Lấy thông tin video
             base_name = os.path.basename(video_path)
             name_without_ext = os.path.splitext(base_name)[0]
             file_ext = os.path.splitext(base_name)[1]
             
-            self.add_log("INFO", f"🎬 [SUBTITLE] Processing: {base_name}")
+            self.add_log("INFO", f"🎬 [SUBTITLE DEBUG] Starting subtitle processing for: {base_name}")
             
+            # Step 1: Validate video file
             if not os.path.exists(video_path):
-                self.add_log("ERROR", f"❌ Video file not found: {video_path}")
+                self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Video file not found: {video_path}")
                 return False, ""
             
-            # Video dimensions detection
-            self.add_log("INFO", "📐 Detecting video dimensions...")
-            video_width, video_height = self.get_video_dimensions(video_path)
+            file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            self.add_log("INFO", f"📊 [SUBTITLE DEBUG] Video file size: {file_size_mb:.2f} MB")
             
-            if not video_width or not video_height:
-                self.add_log("ERROR", f"❌ Cannot determine video dimensions: {base_name}")
-                return False, ""
-            
-            self.add_log("SUCCESS", f"✅ Video dimensions detected: {video_width}x{video_height}")
-            
-            # API key validation
-            self.add_log("INFO", "🔑 Validating API key...")
+            # Step 2: Validate API key
+            self.add_log("INFO", "🔑 [SUBTITLE DEBUG] Validating API key...")
             api_key = self.get_validated_api_key()
             if not api_key:
-                self.add_log("ERROR", "❌ API key validation failed")
+                self.add_log("ERROR", "❌ [SUBTITLE DEBUG] API key validation failed")
                 return False, ""
             
-            # Language and position settings
+            self.add_log("SUCCESS", f"✅ [SUBTITLE DEBUG] API key validated: {api_key[:10]}...{api_key[-4:]}")
+            
+            # Step 3: Get language settings
             source_lang = self.source_lang.currentText()
             target_lang = self.target_lang.currentText()
             
-            # 🔥 SUBTITLE SETTINGS: Y position only, X always centered
-            subtitle_y = self.subtitle_y.value()
-            font_size = self.subtitle_size.value()
-            style = self.subtitle_style.currentText()
+            self.add_log("INFO", f"🌐 [SUBTITLE DEBUG] Languages: {source_lang} → {target_lang}")
             
-            self.add_log("INFO", f"🌐 Languages: {source_lang} → {target_lang}")
-            self.add_log("INFO", f"📍 GUI Position: AUTO-CENTERED horizontally, Y={subtitle_y} pixels")
-            self.add_log("INFO", f"🎨 Style: {style}, Font Size: {font_size}px")
+            # Step 4: Import validation - 🔥 CRITICAL CHECK
+            self.add_log("INFO", "📦 [SUBTITLE DEBUG] Checking import availability...")
+            if not hasattr(self, 'subtitle_import_available'):
+                try:
+                    from gg_api.get_subtitle import process_video_for_subtitles, get_default_words_per_line
+                    self.subtitle_import_available = True
+                    self.add_log("SUCCESS", "✅ [SUBTITLE DEBUG] Subtitle module imported successfully")
+                except ImportError as e:
+                    self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Failed to import subtitle module: {str(e)}")
+                    return False, ""
+                except Exception as e:
+                    self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Unexpected import error: {str(e)}")
+                    return False, ""
             
-            # [API call code unchanged...]
-            from gg_api.get_subtitle import process_video_for_subtitles, get_default_words_per_line
-            
+            # Step 5: Get words per line
             try:
+                from gg_api.get_subtitle import get_default_words_per_line
                 words_per_line = get_default_words_per_line(target_lang)
-            except Exception:
+                self.add_log("INFO", f"📝 [SUBTITLE DEBUG] Words per line: {words_per_line}")
+            except Exception as e:
+                self.add_log("WARNING", f"⚠️ [SUBTITLE DEBUG] Error getting words per line, using default: {str(e)}")
                 words_per_line = 8
-                self.add_log("WARNING", f"⚠️ Using default words per line: {words_per_line}")
             
+            # Step 6: Create SRT output path
             srt_temp_path = os.path.join(output_dir, f"{name_without_ext}_subtitle.srt")
+            self.add_log("INFO", f"📄 [SUBTITLE DEBUG] SRT output path: {srt_temp_path}")
             
-            self.add_log("INFO", "🤖 Calling Gemini API for subtitle generation...")
+            # Step 7: **CRITICAL** - Call Gemini API
+            self.add_log("INFO", "🤖 [SUBTITLE DEBUG] *** CALLING GEMINI API NOW ***")
+            self.add_log("INFO", "⏳ [SUBTITLE DEBUG] This WILL take 30-120 seconds for AI processing...")
+            self.add_log("INFO", "🕐 [SUBTITLE DEBUG] Please wait, do NOT close the application...")
+            
+            # Force UI update before long operation
+            QApplication.processEvents()
             
             try:
-                import time
-                api_start_time = time.time()
+                from gg_api.get_subtitle import process_video_for_subtitles as api_process_video
                 
-                success, srt_content, message = process_video_for_subtitles(
+                # 🔥 ACTUAL API CALL - THIS IS WHERE THE MAGIC HAPPENS
+                start_time = time.time()
+                success, srt_content, message = api_process_video(
                     video_path=video_path,
                     api_key=api_key,
                     source_lang=source_lang,
                     target_lang=target_lang,
                     words_per_line=words_per_line,
                     ffmpeg_path=None,
-                    log_callback=self.add_log
+                    log_callback=self.add_log  # 🔥 IMPORTANT: Pass log callback
                 )
+                end_time = time.time()
+                elapsed_time = end_time - start_time
                 
-                api_end_time = time.time()
-                api_duration = api_end_time - api_start_time
+                self.add_log("INFO", f"🔍 [SUBTITLE DEBUG] API call completed in {elapsed_time:.1f} seconds")
+                self.add_log("INFO", f"   Success: {success}")
+                self.add_log("INFO", f"   Message: {message}")
                 
-                self.add_log("INFO", f"⏱️ API call completed in {api_duration:.1f} seconds")
-                
+                if srt_content:
+                    self.add_log("INFO", f"   SRT content length: {len(srt_content)} characters")
+                    self.add_log("INFO", f"   SRT preview: {srt_content[:100]}...")
+                else:
+                    self.add_log("ERROR", "   SRT content is empty!")
+                    
             except Exception as api_error:
-                self.add_log("ERROR", f"❌ API call exception: {str(api_error)}")
+                self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Exception during API call: {str(api_error)}")
+                import traceback
+                self.add_log("ERROR", f"   📋 API call traceback: {traceback.format_exc()}")
                 return False, ""
             
             if not success:
-                self.add_log("ERROR", f"❌ API call failed: {message}")
+                self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] API call failed: {message}")
                 return False, ""
             
             if not srt_content or len(srt_content.strip()) < 10:
-                self.add_log("ERROR", f"❌ SRT content is empty or too short")
+                self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] SRT content is empty or too short")
                 return False, ""
             
-            self.add_log("SUCCESS", f"✅ Generated {len(srt_content)} characters of SRT content")
-            
-            # Save SRT file
+            # Step 8: Save SRT file
+            self.add_log("INFO", "💾 [SUBTITLE DEBUG] Saving SRT file...")
             try:
                 with open(srt_temp_path, 'w', encoding='utf-8') as f:
                     f.write(srt_content)
                 
-                if not os.path.exists(srt_temp_path):
-                    self.add_log("ERROR", "❌ SRT file not created")
+                if os.path.exists(srt_temp_path):
+                    srt_file_size = os.path.getsize(srt_temp_path)
+                    self.add_log("SUCCESS", f"✅ [SUBTITLE DEBUG] SRT file saved: {srt_file_size} bytes")
+                else:
+                    self.add_log("ERROR", "❌ [SUBTITLE DEBUG] SRT file not created")
                     return False, ""
-                
-                srt_file_size = os.path.getsize(srt_temp_path)
-                self.add_log("SUCCESS", f"✅ SRT file saved: {os.path.basename(srt_temp_path)} ({srt_file_size} bytes)")
                     
             except Exception as e:
-                self.add_log("ERROR", f"❌ Failed to save SRT: {str(e)}")
+                self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Failed to save SRT: {str(e)}")
                 return False, ""
             
-            # Create final output path
+            # Step 9: Create output video path
             output_video_path = os.path.join(output_dir, f"{name_without_ext}_with_subtitles{file_ext}")
+            self.add_log("INFO", f"🎬 [SUBTITLE DEBUG] Output video path: {output_video_path}")
             
-            # 🔥 FIXED: Add subtitle to video with CENTERED positioning
-            self.add_log("INFO", "🎞️ Adding auto-centered subtitles to video...")
-            self.add_log("INFO", f"   📐 Target video: {video_width}x{video_height}")
-            self.add_log("INFO", f"   🎯 Subtitle: AUTO-CENTERED horizontally, Y={subtitle_y} scaled")
-            
-            ffmpeg_start_time = time.time()
-            
-            # 🔥 CALL UPDATED add_subtitles_to_video() function
-            subtitle_success = self.add_subtitles_to_video_centered(
+            # Step 10: Add subtitle to video using FFmpeg
+            self.add_log("INFO", "🎞️ [SUBTITLE DEBUG] Adding subtitles to video with FFmpeg...")
+            subtitle_success = self.add_subtitles_to_video(
                 input_video=video_path,
                 srt_file=srt_temp_path,
                 output_video=output_video_path
             )
             
-            ffmpeg_end_time = time.time()
-            ffmpeg_duration = ffmpeg_end_time - ffmpeg_start_time
-            
             if subtitle_success:
-                if os.path.exists(output_video_path):
-                    output_file_size = os.path.getsize(output_video_path)
-                    self.add_log("SUCCESS", f"✅ Video with centered subtitles created!")
-                    self.add_log("SUCCESS", f"   📁 Output: {os.path.basename(output_video_path)}")
-                    self.add_log("SUCCESS", f"   📐 Dimensions: {video_width}x{video_height} (auto-centered)")
-                    self.add_log("SUCCESS", f"   💾 File size: {output_file_size:,} bytes")
-                    self.add_log("SUCCESS", f"   ⏱️ FFmpeg processing time: {ffmpeg_duration:.1f} seconds")
-                    
-                    return True, output_video_path
-                else:
-                    self.add_log("ERROR", "❌ Output video file was not created")
-                    return False, ""
+                self.add_log("SUCCESS", f"✅ [SUBTITLE DEBUG] Final video created: {os.path.basename(output_video_path)}")
+                
+                # Cleanup SRT file
+                try:
+                    os.remove(srt_temp_path)
+                    self.add_log("INFO", "🧹 [SUBTITLE DEBUG] Temporary SRT file cleaned up")
+                except:
+                    self.add_log("WARNING", "⚠️ [SUBTITLE DEBUG] Could not cleanup SRT file")
+                
+                return True, output_video_path
             else:
-                self.add_log("ERROR", "❌ Failed to add centered subtitles to video")
+                self.add_log("ERROR", "❌ [SUBTITLE DEBUG] Failed to add subtitles to video")
                 return False, ""
                 
         except Exception as e:
-            self.add_log("ERROR", f"❌ Subtitle processing error: {str(e)}")
+            self.add_log("ERROR", f"❌ [SUBTITLE DEBUG] Unexpected error: {str(e)}")
             import traceback
-            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
+            self.add_log("ERROR", f"   📋 Full traceback: {traceback.format_exc()}")
             return False, ""
-
 
     def debug_preview_sync(self):
         """🔥 DEBUG: Kiểm tra đồng bộ giữa GUI và preview"""
@@ -1413,7 +1284,7 @@ class VideoEditorMainWindow(QMainWindow):
         self.add_log("DEBUG", f"   Scale Factors: {scale_x:.3f}, {scale_y:.3f}")
 
     def setup_defaults(self):
-        """🔥 FIXED: Thiết lập giá trị mặc định chính xác với timing và vị trí tùy chỉnh"""
+        """🔥 FIXED: Thiết lập giá trị mặc định chính xác với GUI sync test"""
         try:
             # 1. MẶC ĐỊNH OUTPUT FOLDER LÀ "output"
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1455,7 +1326,20 @@ class VideoEditorMainWindow(QMainWindow):
                 self.banner_end_time.setValue(12)  # Kết thúc ở giây thứ 12
                 self.add_log("INFO", f"⏰ Default banner end time: 12 seconds")
             
-            # 5. MẶC ĐỊNH BẬT CHROMAKEY (XÓA NỀN XANH)
+            # 🔥 5. SUBTITLE DEFAULTS - QUAN TRỌNG CHO GUI SYNC
+            if hasattr(self, 'subtitle_size'):
+                self.subtitle_size.setValue(40)  # Font size mặc định
+                self.add_log("INFO", f"🔤 Default subtitle font size: 40px")
+                
+            if hasattr(self, 'subtitle_y'):
+                self.subtitle_y.setValue(1200)  # Y position mặc định
+                self.add_log("INFO", f"📍 Default subtitle Y position: 1200px")
+                
+            if hasattr(self, 'subtitle_style'):
+                self.subtitle_style.setCurrentText("White with Shadow")  # Style mặc định
+                self.add_log("INFO", f"🎨 Default subtitle style: White with Shadow")
+            
+            # 6. MẶC ĐỊNH BẬT CHROMAKEY (XÓA NỀN XANH)
             if hasattr(self, 'enable_chromakey'):
                 self.enable_chromakey.setChecked(True)
                 # Enable chromakey controls
@@ -1465,29 +1349,42 @@ class VideoEditorMainWindow(QMainWindow):
                     self.chroma_tolerance.setEnabled(True)
                 self.add_log("INFO", "🎭 Chromakey (remove green background) enabled by default")
             
-            # 6. MẶC ĐỊNH CHROMA COLOR LÀ GREEN
+            # 7. MẶC ĐỊNH CHROMA COLOR LÀ GREEN
             if hasattr(self, 'chroma_color'):
                 self.chroma_color.setCurrentText("Green (0x00ff00)")
                 self.add_log("INFO", "🟢 Default chromakey color: Green")
             
-            # 🔥 7. CẬP NHẬT PREVIEW NGAY SAU KHI SET DEFAULTS
+            # 🔥 8. MẶC ĐỊNH BẬT SUBTITLE
+            if hasattr(self, 'chk_add_subtitle'):
+                self.chk_add_subtitle.setChecked(True)
+                self.add_log("INFO", "📝 Add Subtitles enabled by default")
+            
+            # 🔥 9. CẬP NHẬT PREVIEW NGAY SAU KHI SET DEFAULTS
             QApplication.processEvents()  # Đảm bảo UI đã load xong
             if hasattr(self, '_update_preview_positions'):
                 self._update_preview_positions()
                 self.add_log("INFO", "🔄 Preview positions updated with new defaults")
             
-            # 🔥 MẶC ĐỊNH BẬT SUBTITLE
-            if hasattr(self, 'chk_add_subtitle'):
-                self.chk_add_subtitle.setChecked(True)
-                self.add_log("INFO", "📝 Add Subtitles enabled by default")
-
-            # 8. LOG TỔNG KẾT CÁC SETTINGS
+            # 🔥 10. TEST GUI SYNC - Đọc lại các giá trị để verify
+            self.add_log("SUCCESS", "✅ GUI SYNC TEST - Verifying default values:")
+            if hasattr(self, 'subtitle_size'):
+                actual_font = self.subtitle_size.value()
+                self.add_log("INFO", f"   🔤 Font size verified: {actual_font}px")
+            if hasattr(self, 'subtitle_y'):
+                actual_y = self.subtitle_y.value()
+                self.add_log("INFO", f"   📍 Y position verified: {actual_y}px")
+            if hasattr(self, 'subtitle_style'):
+                actual_style = self.subtitle_style.currentText()
+                self.add_log("INFO", f"   🎨 Style verified: {actual_style}")
+            
+            # 11. LOG TỔNG KẾT CÁC SETTINGS
             self.add_log("SUCCESS", "✅ All default settings applied successfully:")
             self.add_log("INFO", "   🖼️ Banner: ENABLED")
             self.add_log("INFO", "   📍 Position: (230, 1400) pixels")
             self.add_log("INFO", "   📐 Size: 18% of video height")
             self.add_log("INFO", "   ⏰ Timing: 5-12 seconds (7 seconds duration)")
             self.add_log("INFO", "   🎭 Chromakey: ENABLED (Green removal)")
+            self.add_log("INFO", "   📝 Subtitle: ENABLED, 40px font, Y=1200px, White with Shadow")
             self.add_log("INFO", "   📁 Output: ./output folder")
             
         except Exception as e:
@@ -1580,24 +1477,28 @@ class VideoEditorMainWindow(QMainWindow):
 
 
     def _update_preview_positions(self):
-        """FIXED: Cập nhật preview với TikTok-safe subtitle positioning và safety checks"""
+        """FIXED: Cập nhật preview với TikTok-safe subtitle positioning và GUI sync"""
         if not hasattr(self, 'video_preview') or self.video_preview is None:
             return
 
         try:
-            # Lấy giá trị thực tế từ GUI controls với safety checks
+            # 🔥 FIXED: Lấy giá trị THỰC TẾ từ GUI controls với safety checks
             real_banner_x = self.banner_x.value() if hasattr(self, 'banner_x') and self.banner_x is not None else 230
             real_banner_y = self.banner_y.value() if hasattr(self, 'banner_y') and self.banner_y is not None else 1400
             real_subtitle_y = self.subtitle_y.value() if hasattr(self, 'subtitle_y') and self.subtitle_y is not None else 1200
             real_source_x = self.source_x.value() if hasattr(self, 'source_x') and self.source_x is not None else 50
             real_source_y = self.source_y.value() if hasattr(self, 'source_y') and self.source_y is not None else 50
             
+            # 🔥 ADDED: Lấy font size từ GUI để hiển thị trong preview
+            gui_font_size = self.subtitle_size.value() if hasattr(self, 'subtitle_size') and self.subtitle_size is not None else 40
+            gui_style = self.subtitle_style.currentText() if hasattr(self, 'subtitle_style') and self.subtitle_style is not None else "White with Shadow"
+            
             # Tính kích thước banner thực tế với safety check
             banner_height_ratio = self.banner_height_ratio.value() if hasattr(self, 'banner_height_ratio') and self.banner_height_ratio is not None else 0.18
             real_banner_height = int(1920 * banner_height_ratio)
             real_banner_width = int(real_banner_height * 16/9)
             
-            # 🔥 SUBTITLE: Always use TikTok-safe area
+            # 🔥 SUBTITLE: Always use TikTok-safe area - SAME as processing function
             REFERENCE_WIDTH = 1080
             BASE_LEFT_MARGIN = 90
             BASE_RIGHT_MARGIN = 130
@@ -1611,9 +1512,14 @@ class VideoEditorMainWindow(QMainWindow):
             self.video_preview.update_from_real_coordinates('subtitle', subtitle_safe_left, real_subtitle_y, subtitle_safe_width, subtitle_height)
             self.video_preview.update_from_real_coordinates('source', real_source_x, real_source_y)
             
+            # 🔥 LOG GUI VALUES FOR DEBUGGING
+            self.add_log("DEBUG", f"🔄 Preview updated with GUI values:")
+            self.add_log("DEBUG", f"   📍 Banner: ({real_banner_x}, {real_banner_y}) {real_banner_width}x{real_banner_height}")
+            self.add_log("DEBUG", f"   📝 Subtitle: Y={real_subtitle_y}, Font={gui_font_size}px, Style={gui_style}")
+            self.add_log("DEBUG", f"   📎 Source: ({real_source_x}, {real_source_y})")
+            
         except Exception as e:
             self.add_log("ERROR", f"❌ Error updating preview positions: {str(e)}")
-
 
     # SỬA 3: Hàm init_ui() - THAY THẾ TOÀN BỘ
     def init_ui(self):
@@ -3256,7 +3162,7 @@ class VideoEditorMainWindow(QMainWindow):
     def add_log(self, level, message):
         """Add formatted log entry with timestamp and color"""
         color_map = {
-            "INFO": "#63b3ed",
+            "INFO": "#0A86DE",
             "SUCCESS": "#68d391", 
             "WARNING": "#f6ad55",
             "ERROR": "#fc8181"

@@ -429,13 +429,11 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
         return False, "", f"Pipeline error: {str(e)}"
 
 
+# 🔥 THAY THẾ hàm fix_srt_timestamps() trong gg_api/get_subtitle.py
+
 def fix_srt_timestamps(srt_content: str, log_callback=None) -> str:
     """
-    🔧 Sửa lỗi timestamp phụ đề .srt mà không làm tròn thời gian.
-    Bao gồm:
-    - 00:03:500 → 00:00:03,500
-    - 03:819 --> 08:449 → 00:03:819 --> 00:08:449
-    - 8000 → 800 (truncate milliseconds)
+    🔧 ENHANCED: SRT timestamp fix với xử lý milliseconds thiếu chữ số
     """
     def log(level, message):
         if log_callback:
@@ -445,146 +443,317 @@ def fix_srt_timestamps(srt_content: str, log_callback=None) -> str:
         import re
 
         if log_callback:
-            log("INFO", "🔧 SRT timestamp fix - NO ROUNDING, position change only")
+            log("INFO", "🔧 SRT timestamp fix - ENHANCED with milliseconds padding")
 
-        fixed_content = srt_content
+        current_content = srt_content
+        total_iterations = 0
         total_fixes = 0
-
-        # ✅ Thêm "00:" nếu timestamp có dạng MM:SSS trước/sau -->
-        pattern_pre_fix = r'(?<!\d)(\d{1,2}):(\d{3})(?=\s*-->)'
-        pattern_post_fix = r'(?<=-->\s*)(\d{1,2}):(\d{3})(?!\d)'
-
-        def fix_missing_hour_pre(match):
-            mm, sss = match.groups()
-            return f"00:{mm}:{sss}"
-
-        def fix_missing_hour_post(match):
-            mm, sss = match.groups()
-            return f"00:{mm}:{sss}"
-
-        fixed_content = re.sub(pattern_pre_fix, fix_missing_hour_pre, fixed_content)
-        fixed_content = re.sub(pattern_post_fix, fix_missing_hour_post, fixed_content)
-
-        # ✅ Chuyển HH:MM:SSS thành HH:MM:SS,mmm
-        pattern = r'(\d{2}):(\d{2}):(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{3})'
-
-        def fix_timestamp_format(match):
-            start_h, start_m, start_sss, end_h, end_m, end_sss = match.groups()
-
-            def convert_sss_to_seconds_milliseconds(sss_str):
-                sss = int(sss_str)
-                if sss >= 100:
-                    seconds = sss // 100
-                    centiseconds = sss % 100
-                    milliseconds = centiseconds * 10
-                else:
-                    seconds = 0
-                    milliseconds = sss * 10
-                return seconds, milliseconds
-
-            start_seconds, start_ms = convert_sss_to_seconds_milliseconds(start_sss)
-            start_minutes = int(start_m) + (start_seconds // 60)
-            start_seconds = start_seconds % 60
-            start_hours = int(start_h) + (start_minutes // 60)
-            start_minutes = start_minutes % 60
-            start_final = f"{start_hours:02d}:{start_minutes:02d}:{start_seconds:02d},{start_ms:03d}"
-
-            end_seconds, end_ms = convert_sss_to_seconds_milliseconds(end_sss)
-            end_minutes = int(end_m) + (end_seconds // 60)
-            end_seconds = end_seconds % 60
-            end_hours = int(end_h) + (end_minutes // 60)
-            end_minutes = end_minutes % 60
-            end_final = f"{end_hours:02d}:{end_minutes:02d}:{end_seconds:02d},{end_ms:03d}"
-
-            return f"{start_final} --> {end_final}"
-
-        matches = re.findall(pattern, fixed_content)
-        if matches:
-            fixed_content = re.sub(pattern, fix_timestamp_format, fixed_content)
-            total_fixes += len(matches)
+        max_iterations = 15
+        
+        while total_iterations < max_iterations:
+            iteration_fixes = 0
+            total_iterations += 1
+            
             if log_callback:
-                log("SUCCESS", f"✅ Fixed {len(matches)} timestamps (NO ROUNDING)")
-                for i, match in enumerate(matches[:3]):
-                    original = f"{match[0]}:{match[1]}:{match[2]} --> {match[3]}:{match[4]}:{match[5]}"
-                    log("INFO", f"   Example {i+1}: {original}")
+                log("INFO", f"🔄 Iteration {total_iterations}: Checking for fixes...")
+            
+            pattern_3digit_hours = r'(\d{3}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{3}):(\d{2}):(\d{2}),(\d{3})'
+            matches_3digit = re.findall(pattern_3digit_hours, current_content)
+            if matches_3digit:
+                def fix_3digit_hours(match):
+                    start_h, start_m, start_s, start_ms, end_h, end_m, end_s, end_ms = match.groups()
+                    
+                    # Convert 3-digit hours to 2-digit hours
+                    start_h_fixed = start_h.lstrip('0').zfill(2)  # 000 -> 00, 012 -> 12
+                    end_h_fixed = end_h.lstrip('0').zfill(2)
+                    
+                    return f"{start_h_fixed}:{start_m}:{start_s},{start_ms} --> {end_h_fixed}:{end_m}:{end_s},{end_ms}"
+                
+                current_content = re.sub(pattern_3digit_hours, fix_3digit_hours, current_content)
+                iteration_fixes += len(matches_3digit)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_3digit)} timestamps with 3-digit hours")
 
-        # ✅ Thêm giờ nếu thiếu (MM:SS,mmm)
-        pattern2 = r'(\d{1,2}):(\d{2}),(\d{3})\s*-->\s*(\d{1,2}):(\d{2}),(\d{3})'
+            # 🔥 NEW Pattern 1: Pad milliseconds thiếu chữ số (1-2 digits) -> 3 digits
+            pattern_milliseconds_pad = r'(\d{2}:\d{2}:\d{2}),(\d{1,2})(\s*-->\s*)(\d{2}:\d{2}:\d{2}),(\d{1,2})'
+            matches_ms_pad = re.findall(pattern_milliseconds_pad, current_content)
+            if matches_ms_pad:
+                def pad_milliseconds(match):
+                    start_time, start_ms, arrow, end_time, end_ms = match.groups()
+                    
+                    # Pad milliseconds to 3 digits
+                    start_ms_padded = start_ms.ljust(3, '0')  # 80 -> 800, 8 -> 800
+                    end_ms_padded = end_ms.ljust(3, '0')
+                    
+                    return f"{start_time},{start_ms_padded}{arrow}{end_time},{end_ms_padded}"
+                
+                current_content = re.sub(pattern_milliseconds_pad, pad_milliseconds, current_content)
+                iteration_fixes += len(matches_ms_pad)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Padded {len(matches_ms_pad)} short milliseconds")
 
-        def add_hours(match):
-            start_min, start_sec, start_ms, end_min, end_sec, end_ms = match.groups()
-            start_fixed = f"00:{start_min:0>2}:{start_sec},{start_ms}"
-            end_fixed = f"00:{end_min:0>2}:{end_sec},{end_ms}"
-            return f"{start_fixed} --> {end_fixed}"
+            # 🔥 NEW Pattern 2: Fix super short milliseconds (single digit) 
+            pattern_single_ms = r'(\d{2}:\d{2}:\d{2}),(\d{1})(\s*-->\s*)(\d{2}:\d{2}:\d{2}),(\d{1})'
+            matches_single_ms = re.findall(pattern_single_ms, current_content)
+            if matches_single_ms:
+                def fix_single_milliseconds(match):
+                    start_time, start_ms, arrow, end_time, end_ms = match.groups()
+                    
+                    # Single digit: 5 -> 500, 8 -> 800
+                    start_ms_fixed = start_ms + "00"
+                    end_ms_fixed = end_ms + "00"
+                    
+                    return f"{start_time},{start_ms_fixed}{arrow}{end_time},{end_ms_fixed}"
+                
+                current_content = re.sub(pattern_single_ms, fix_single_milliseconds, current_content)
+                iteration_fixes += len(matches_single_ms)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_single_ms)} single-digit milliseconds")
 
-        matches2 = re.findall(pattern2, fixed_content)
-        if matches2:
-            fixed_content = re.sub(pattern2, add_hours, fixed_content)
-            total_fixes += len(matches2)
-            if log_callback:
-                log("SUCCESS", f"✅ Added missing hours: {len(matches2)} timestamps")
+            # ✅ Pattern 3: Fix frame number timestamps HH:MM:SS:FF,mmm
+            pattern_frame = r'(\d{2}):(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}):(\d{2}),(\d{3})'
+            matches_frame = re.findall(pattern_frame, current_content)
+            if matches_frame:
+                def fix_frame_timestamps(match):
+                    start_h, start_m, start_s, start_f, start_ms, end_h, end_m, end_s, end_f, end_ms = match.groups()
+                    
+                    # Convert frame to additional seconds (assume 25 fps)
+                    fps = 25
+                    start_extra_seconds = int(start_f) / fps
+                    end_extra_seconds = int(end_f) / fps
+                    
+                    # Calculate total seconds
+                    start_total_seconds = int(start_s) + start_extra_seconds
+                    end_total_seconds = int(end_s) + end_extra_seconds
+                    
+                    # Handle overflow
+                    start_minutes = int(start_m) + int(start_total_seconds // 60)
+                    start_seconds = int(start_total_seconds % 60)
+                    start_milliseconds = int((start_total_seconds % 1) * 1000) + int(start_ms)
+                    
+                    end_minutes = int(end_m) + int(end_total_seconds // 60)
+                    end_seconds = int(end_total_seconds % 60)
+                    end_milliseconds = int((end_total_seconds % 1) * 1000) + int(end_ms)
+                    
+                    # Handle millisecond overflow
+                    if start_milliseconds >= 1000:
+                        start_seconds += start_milliseconds // 1000
+                        start_milliseconds = start_milliseconds % 1000
+                    
+                    if end_milliseconds >= 1000:
+                        end_seconds += end_milliseconds // 1000
+                        end_milliseconds = end_milliseconds % 1000
+                    
+                    # Handle second overflow
+                    if start_seconds >= 60:
+                        start_minutes += start_seconds // 60
+                        start_seconds = start_seconds % 60
+                    
+                    if end_seconds >= 60:
+                        end_minutes += end_seconds // 60
+                        end_seconds = end_seconds % 60
+                    
+                    # Handle minute overflow
+                    start_hours = int(start_h) + (start_minutes // 60)
+                    start_minutes = start_minutes % 60
+                    
+                    end_hours = int(end_h) + (end_minutes // 60)
+                    end_minutes = end_minutes % 60
+                    
+                    # Format result
+                    start_final = f"{start_hours:02d}:{start_minutes:02d}:{start_seconds:02d},{start_milliseconds:03d}"
+                    end_final = f"{end_hours:02d}:{end_minutes:02d}:{end_seconds:02d},{end_milliseconds:03d}"
+                    
+                    return f"{start_final} --> {end_final}"
 
-        # ✅ Pad milliseconds ngắn
-        pattern3 = r'(\d{2}:\d{2}:\d{2}),(\d{1,2})(\s*-->\s*)(\d{2}:\d{2}:\d{2}),(\d{1,2})'
+                current_content = re.sub(pattern_frame, fix_frame_timestamps, current_content)
+                iteration_fixes += len(matches_frame)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_frame)} frame number timestamps (HH:MM:SS:FF)")
 
-        def pad_milliseconds(match):
-            start_time, start_ms, arrow, end_time, end_ms = match.groups()
-            start_ms_padded = start_ms.ljust(3, '0')
-            end_ms_padded = end_ms.ljust(3, '0')
-            return f"{start_time},{start_ms_padded}{arrow}{end_time},{end_ms_padded}"
+            # ✅ Pattern 4: Fix simple frame timestamps MM:SS:FF
+            pattern_simple_frame = r'(\d{1,2}):(\d{2}):(\d{2})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})'
+            matches_simple_frame = re.findall(pattern_simple_frame, current_content)
+            if matches_simple_frame:
+                def fix_simple_frame_timestamps(match):
+                    start_m, start_s, start_f, end_m, end_s, end_f = match.groups()
+                    
+                    # Convert frame to additional seconds (assume 25 fps)
+                    fps = 25
+                    start_extra_seconds = int(start_f) / fps
+                    end_extra_seconds = int(end_f) / fps
+                    
+                    # Calculate total seconds
+                    start_total_seconds = int(start_s) + start_extra_seconds
+                    end_total_seconds = int(end_s) + end_extra_seconds
+                    
+                    # Handle overflow
+                    start_minutes = int(start_m) + int(start_total_seconds // 60)
+                    start_seconds = int(start_total_seconds % 60)
+                    start_milliseconds = int((start_total_seconds % 1) * 1000)
+                    
+                    end_minutes = int(end_m) + int(end_total_seconds // 60)
+                    end_seconds = int(end_total_seconds % 60)
+                    end_milliseconds = int((end_total_seconds % 1) * 1000)
+                    
+                    # Handle minute overflow
+                    start_hours = start_minutes // 60
+                    start_minutes = start_minutes % 60
+                    
+                    end_hours = end_minutes // 60
+                    end_minutes = end_minutes % 60
+                    
+                    # Format result
+                    start_final = f"{start_hours:02d}:{start_minutes:02d}:{start_seconds:02d},{start_milliseconds:03d}"
+                    end_final = f"{end_hours:02d}:{end_minutes:02d}:{end_seconds:02d},{end_milliseconds:03d}"
+                    
+                    return f"{start_final} --> {end_final}"
 
-        matches3 = re.findall(pattern3, fixed_content)
-        if matches3:
-            fixed_content = re.sub(pattern3, pad_milliseconds, fixed_content)
-            total_fixes += len(matches3)
-            if log_callback:
-                log("SUCCESS", f"✅ Padded short milliseconds: {len(matches3)} timestamps")
+                current_content = re.sub(pattern_simple_frame, fix_simple_frame_timestamps, current_content)
+                iteration_fixes += len(matches_simple_frame)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_simple_frame)} simple frame timestamps (MM:SS:FF)")
 
-        # ✅ Truncate milliseconds quá dài
-        pattern5 = r'(\d{2}:\d{2}:\d{2}),(\d{4,})(\s*-->\s*\d{2}:\d{2}:\d{2}),(\d{4,})'
+            # ✅ Pattern 5: Thêm "00:" nếu timestamp có dạng MM:SSS trước -->
+            pattern_pre_fix = r'\b(\d{1,2}):(\d{3})\s*-->'
+            matches_pre = re.findall(pattern_pre_fix, current_content)
+            if matches_pre:
+                def fix_missing_hour_pre(match):
+                    mm, sss = match.groups()
+                    return f"00:{mm}:{sss} -->"
+                
+                current_content = re.sub(pattern_pre_fix, fix_missing_hour_pre, current_content)
+                iteration_fixes += len(matches_pre)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_pre)} timestamps before '-->'")
 
-        def truncate_milliseconds(match):
-            start_time, start_ms, arrow, end_ms = match.groups()
-            return f"{start_time},{start_ms[:3]}{arrow}{end_ms[:3]}"
+            # ✅ Pattern 6: Thêm "00:" nếu timestamp có dạng MM:SSS sau -->
+            pattern_post_fix = r'-->\s*(\d{1,2}):(\d{3})\b'
+            matches_post = re.findall(pattern_post_fix, current_content)
+            if matches_post:
+                def fix_missing_hour_post(match):
+                    mm, sss = match.groups()
+                    return f"--> 00:{mm}:{sss}"
+                
+                current_content = re.sub(pattern_post_fix, fix_missing_hour_post, current_content)
+                iteration_fixes += len(matches_post)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_post)} timestamps after '-->'")
 
-        matches5 = re.findall(pattern5, fixed_content)
-        if matches5:
-            fixed_content = re.sub(pattern5, truncate_milliseconds, fixed_content)
-            total_fixes += len(matches5)
-            if log_callback:
-                log("SUCCESS", f"✅ Truncated long milliseconds: {len(matches5)} timestamps")
+            # ✅ Pattern 7: Chuyển HH:MM:SSS thành HH:MM:SS,mmm
+            pattern_sss = r'(\d{2}):(\d{2}):(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{3})'
+            matches_sss = re.findall(pattern_sss, current_content)
+            if matches_sss:
+                def fix_timestamp_format(match):
+                    start_h, start_m, start_sss, end_h, end_m, end_sss = match.groups()
 
-        # ✅ Tách các block bị dính
-        pattern4 = r'([^\n]+)\n(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3})'
+                    def convert_sss_to_seconds_milliseconds(sss_str):
+                        sss = int(sss_str)
+                        if sss >= 100:
+                            seconds = sss // 100
+                            centiseconds = sss % 100
+                            milliseconds = centiseconds * 10
+                        else:
+                            seconds = 0
+                            milliseconds = sss * 10
+                        return seconds, milliseconds
 
-        def separate_blocks(match):
-            text_line, number, timing = match.groups()
-            return f"{text_line}\n\n{number}\n{timing}"
+                    start_seconds, start_ms = convert_sss_to_seconds_milliseconds(start_sss)
+                    start_minutes = int(start_m) + (start_seconds // 60)
+                    start_seconds = start_seconds % 60
+                    start_hours = int(start_h) + (start_minutes // 60)
+                    start_minutes = start_minutes % 60
+                    start_final = f"{start_hours:02d}:{start_minutes:02d}:{start_seconds:02d},{start_ms:03d}"
 
-        matches4 = re.findall(pattern4, fixed_content)
-        if matches4:
-            fixed_content = re.sub(pattern4, separate_blocks, fixed_content)
-            total_fixes += len(matches4)
-            if log_callback:
-                log("SUCCESS", f"✅ Separated stuck blocks: {len(matches4)}")
+                    end_seconds, end_ms = convert_sss_to_seconds_milliseconds(end_sss)
+                    end_minutes = int(end_m) + (end_seconds // 60)
+                    end_seconds = end_seconds % 60
+                    end_hours = int(end_h) + (end_minutes // 60)
+                    end_minutes = end_minutes % 60
+                    end_final = f"{end_hours:02d}:{end_minutes:02d}:{end_seconds:02d},{end_ms:03d}"
 
-        # ✅ Xóa dòng trắng thừa
-        fixed_content = re.sub(r'\n{3,}', '\n\n', fixed_content)
+                    return f"{start_final} --> {end_final}"
 
-        if total_fixes > 0:
-            if log_callback:
-                log("SUCCESS", f"🎉 SRT format fixed: {total_fixes} changes (NO NUMBERS ROUNDED)")
-        else:
-            if log_callback:
-                log("INFO", "✅ SRT format was already correct")
+                current_content = re.sub(pattern_sss, fix_timestamp_format, current_content)
+                iteration_fixes += len(matches_sss)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Converted {len(matches_sss)} SSS format timestamps")
 
-        return fixed_content.strip()
+            # ✅ Pattern 8: Truncate milliseconds quá dài
+            pattern_truncate = r'(\d{2}:\d{2}:\d{2}),(\d{4,})'
+            matches_truncate = re.findall(pattern_truncate, current_content)
+            if matches_truncate:
+                def truncate_milliseconds(match):
+                    time_part, ms = match.groups()
+                    return f"{time_part},{ms[:3]}"
+
+                current_content = re.sub(pattern_truncate, truncate_milliseconds, current_content)
+                iteration_fixes += len(matches_truncate)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Truncated {len(matches_truncate)} long milliseconds")
+
+            # ✅ Pattern 9: Tách các block bị dính
+            pattern_blocks = r'([^\n]+)\n(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3})'
+            matches_blocks = re.findall(pattern_blocks, current_content)
+            if matches_blocks:
+                def separate_blocks(match):
+                    text_line, number, timing = match.groups()
+                    return f"{text_line}\n\n{number}\n{timing}"
+
+                current_content = re.sub(pattern_blocks, separate_blocks, current_content)
+                iteration_fixes += len(matches_blocks)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Separated {len(matches_blocks)} stuck blocks")
+
+            # 🔥 NEW Pattern 10: Fix timestamp với comma sai vị trí
+            pattern_comma_fix = r'(\d{2}:\d{2}:\d{2})\.(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})\.(\d{3})'
+            matches_comma = re.findall(pattern_comma_fix, current_content)
+            if matches_comma:
+                def fix_comma_in_timestamp(match):
+                    start_time, start_ms, end_time, end_ms = match.groups()
+                    return f"{start_time},{start_ms} --> {end_time},{end_ms}"
+                
+                current_content = re.sub(pattern_comma_fix, fix_comma_in_timestamp, current_content)
+                iteration_fixes += len(matches_comma)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_comma)} dot separators to comma")
+
+            # 🔥 NEW Pattern 11: Fix empty or invalid milliseconds
+            pattern_empty_ms = r'(\d{2}:\d{2}:\d{2}),(\s*-->\s*)(\d{2}:\d{2}:\d{2}),'
+            matches_empty_ms = re.findall(pattern_empty_ms, current_content)
+            if matches_empty_ms:
+                def fix_empty_milliseconds(match):
+                    start_time, arrow, end_time = match.groups()
+                    return f"{start_time},000{arrow}{end_time},000"
+                
+                current_content = re.sub(pattern_empty_ms, fix_empty_milliseconds, current_content)
+                iteration_fixes += len(matches_empty_ms)
+                if log_callback:
+                    log("SUCCESS", f"   ✅ Fixed {len(matches_empty_ms)} empty milliseconds")
+
+            # Cleanup excessive blank lines
+            old_content = current_content
+            current_content = re.sub(r'\n{3,}', '\n\n', current_content)
+            if current_content != old_content:
+                iteration_fixes += 1
+
+            total_fixes += iteration_fixes
+            
+            if iteration_fixes == 0:
+                if log_callback:
+                    log("SUCCESS", f"🎉 SRT fix completed after {total_iterations} iterations")
+                    log("SUCCESS", f"   📊 Total fixes applied: {total_fixes}")
+                break
+            else:
+                if log_callback:
+                    log("INFO", f"   📊 Iteration {total_iterations}: {iteration_fixes} fixes applied")
+
+        return current_content.strip()
 
     except Exception as e:
         if log_callback:
             log("ERROR", f"❌ Error in SRT fix: {str(e)}")
         return srt_content
-
 
     
 def get_default_words_per_line(target_language: str) -> int:
