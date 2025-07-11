@@ -12,7 +12,7 @@ import time
 import json
 from typing import Optional, Tuple, List
 import re
-
+import random
 
 try:
     import google.generativeai as genai
@@ -188,8 +188,10 @@ def create_format_correction_prompt(raw_subtitle: str) -> str:
 
 
 def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str, 
-                           target_lang: str, log_callback=None) -> Tuple[bool, str, str]:
-    """Step 1: Generate subtitles using Gemini-2.5-pro"""
+                                    target_lang: str, log_callback=None) -> Tuple[bool, str, str]:
+    """
+    🔥 ENHANCED: Step 1 với fallback Gemini 2.5 Flash và random API pool
+    """
     
     def log(level, message):
         if log_callback:
@@ -201,7 +203,7 @@ def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str,
     try:
         # Configure API
         genai.configure(api_key=api_key)
-        log("INFO", "🔑 Gemini API configured for Step 1")
+        log("INFO", "🔑 Gemini API configured for Enhanced Step 1")
         
         # Upload audio
         log("INFO", f"⬆️ Step 1: Uploading audio file...")
@@ -225,9 +227,10 @@ def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str,
         
         # Create prompt
         prompt = create_subtitle_generation_prompt(source_lang, target_lang)
-        log("INFO", "📝 Step 1: Using Gemini-2.5-pro for subtitle generation...")
         
-        # Try Gemini-2.5-pro first
+        # 🔥 BƯỚC 1: Thử Gemini-2.5-pro trước
+        log("INFO", "📝 Step 1.1: Trying Gemini-2.5-pro for subtitle generation...")
+        
         try:
             model = genai.GenerativeModel("gemini-2.5-pro")
             
@@ -239,26 +242,102 @@ def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str,
                 )
             )
             
-            if response.text:
+            if response.text and len(response.text.strip()) > 50:
                 srt_content = response.text.strip()
-                log("SUCCESS", "✅ Step 1: Subtitles generated with Gemini-2.5-pro")
-                with open(os.path.join(os.path.dirname(__file__), f"gemini_step1_response_{int(time.time())}.txt"), "w", encoding="utf-8") as f:
-                    f.write(response.text)
+                log("SUCCESS", "✅ Step 1.1: Subtitles generated with Gemini-2.5-pro")
                 return True, srt_content, "Generated with Gemini-2.5-pro"
             else:
-                log("ERROR", "❌ Step 1: No response from Gemini-2.5-pro")
-                return False, "", "No response from Gemini-2.5-pro"
+                log("WARNING", "⚠️ Step 1.1: Gemini-2.5-pro returned empty/short response")
                 
         except Exception as e:
-            log("ERROR", f"❌ Step 1: Gemini-2.5-pro failed: {str(e)}")
-            return False, "", f"Gemini-2.5-pro failed: {str(e)}"
+            log("WARNING", f"⚠️ Step 1.1: Gemini-2.5-pro failed: {str(e)}")
+        
+        # 🔥 BƯỚC 1.1: Fallback to Gemini-2.5-flash
+        log("INFO", "📝 Step 1.2: Fallback to Gemini-2.5-flash...")
+        
+        try:
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            
+            response = model.generate_content(
+                [prompt, audio_file],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=8192
+                )
+            )
+            
+            if response.text and len(response.text.strip()) > 50:
+                srt_content = response.text.strip()
+                log("SUCCESS", "✅ Step 1.2: Subtitles generated with Gemini-2.5-flash")
+                return True, srt_content, "Generated with Gemini-2.5-flash"
+            else:
+                log("WARNING", "⚠️ Step 1.2: Gemini-2.5-flash returned empty/short response")
+                
+        except Exception as e:
+            log("WARNING", f"⚠️ Step 1.2: Gemini-2.5-flash failed: {str(e)}")
+        
+        # 🔥 BƯỚC 1.2: Random API pool fallback
+        log("INFO", "📝 Step 1.3: Trying random API keys from pool...")
+        
+        # Load backup API keys
+        backup_keys = load_api_keys()
+        if backup_keys:
+            # Remove current key from backup list
+            backup_keys = [key for key in backup_keys if key != api_key]
+            
+            # Randomly select up to 5 keys
+            random_keys = random.sample(backup_keys, min(5, len(backup_keys)))
+            log("INFO", f"🎲 Step 1.3: Trying {len(random_keys)} random API keys...")
+            
+            for attempt, random_key in enumerate(random_keys, 1):
+                log("INFO", f"🔄 Step 1.3.{attempt}: Trying API key {random_key[:10]}...{random_key[-4:]}")
+                
+                try:
+                    # Test key first
+                    if not test_api_key_simple(random_key, log_callback):
+                        log("WARNING", f"⚠️ API key {attempt} failed validation, skipping...")
+                        continue
+                    
+                    # Configure with random key
+                    genai.configure(api_key=random_key)
+                    
+                    # Try with Gemini-2.5-flash (faster model for fallback)
+                    model = genai.GenerativeModel("gemini-2.5-flash")
+                    
+                    response = model.generate_content(
+                        [prompt, audio_file],
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.1,
+                            max_output_tokens=8192
+                        )
+                    )
+                    
+                    if response.text and len(response.text.strip()) > 50:
+                        srt_content = response.text.strip()
+                        log("SUCCESS", f"✅ Step 1.3.{attempt}: Success with random API key!")
+                        return True, srt_content, f"Generated with random API key #{attempt}"
+                    else:
+                        log("WARNING", f"⚠️ Step 1.3.{attempt}: Empty response from random key")
+                        
+                except Exception as e:
+                    log("WARNING", f"⚠️ Step 1.3.{attempt}: Random key failed: {str(e)}")
+                    continue
+        else:
+            log("WARNING", "⚠️ Step 1.3: No backup API keys available")
+        
+        # 🔥 THẤT BẠI HOÀN TOÀN
+        log("ERROR", "❌ Step 1: All generation methods failed")
+        return False, "", "All subtitle generation methods failed"
         
     except Exception as e:
-        log("ERROR", f"❌ Step 1: API error: {str(e)}")
-        return False, "", f"Step 1 API error: {str(e)}"
+        log("ERROR", f"❌ Step 1: Critical API error: {str(e)}")
+        return False, "", f"Step 1 critical error: {str(e)}"
+
 
 def generate_subtitles_step2(raw_subtitle: str, api_key: str, log_callback=None) -> Tuple[bool, str, str]:
-    """Step 2: Format correction using Gemini-2.5-flash"""
+    """
+    🔥 ENHANCED: Step 2 với fallback Gemini 2.0 Flash và improved prompt
+    """
     
     def log(level, message):
         if log_callback:
@@ -268,59 +347,91 @@ def generate_subtitles_step2(raw_subtitle: str, api_key: str, log_callback=None)
         return False, "", "google-generativeai library not available"
     
     try:
-        # Configure API (reuse same key)
+        # Configure API
         genai.configure(api_key=api_key)
-        log("INFO", "🔧 Step 2: Using Gemini-2.0-lite for format correction...")
+        log("INFO", "🔧 Step 2: Enhanced format correction starting...")
         
-        # Create correction prompt
-        correction_prompt = create_format_correction_prompt(raw_subtitle)
-        
-        # Use Gemini-2.5-flash for correction
-        model = genai.GenerativeModel("gemini-2.0-flash-lite")
-        
-        response = model.generate_content(
-            correction_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.5,  
-                max_output_tokens=8192
-            )
-        )
-        
-        if response.text:
-            corrected_srt = response.text.strip()
+        # 🔥 IMPROVED PROMPT
+        improved_prompt = f"""Convert the following passage into standard .srt format, for example:
+1
+00:00:03,500 --> 00:00:06,008
+Subtitle text here
 
-            with open(os.path.join(os.path.dirname(__file__), f"gemini_step2_response_{int(time.time())}.txt"), "w", encoding="utf-8") as f:
-                f.write(response.text)
-            log("SUCCESS", "✅ Step 2: Format corrected with Gemini-2.5-flash")
-            return True, corrected_srt, "Format corrected with Gemini-2.5-flash"
-        else:
-            log("WARNING", "⚠️ Step 2: No response from Gemini-2.5-flash, using original")
-            return True, raw_subtitle, "Format correction skipped - using original"
+2  
+00:00:06,008 --> 00:00:10,000
+Next subtitle text
+
+with each block separated by one line.
+Output in proper .srt file format.
+
+Content to convert:
+{raw_subtitle}
+"""
+        
+        # 🔥 BƯỚC 2.1: Thử Gemini-2.0-flash-lite trước
+        log("INFO", "🔧 Step 2.1: Trying Gemini-2.0-flash-lite for format correction...")
+        
+        try:
+            model = genai.GenerativeModel("gemini-2.0-flash-lite")
+            
+            response = model.generate_content(
+                improved_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=8192
+                )
+            )
+            
+            if response.text and len(response.text.strip()) > 50:
+                corrected_srt = response.text.strip()
+                log("SUCCESS", "✅ Step 2.1: Format corrected with Gemini-2.0-flash-lite")
+                return True, corrected_srt, "Format corrected with Gemini-2.0-flash-lite"
+            else:
+                log("WARNING", "⚠️ Step 2.1: Gemini-2.0-flash-lite returned empty/short response")
+                
+        except Exception as e:
+            log("WARNING", f"⚠️ Step 2.1: Gemini-2.0-flash-lite failed: {str(e)}")
+        
+        # 🔥 BƯỚC 2.2: Fallback to Gemini-2.0-flash
+        log("INFO", "🔧 Step 2.2: Fallback to Gemini-2.0-flash...")
+        
+        try:
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            
+            response = model.generate_content(
+                improved_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=8192
+                )
+            )
+            
+            if response.text and len(response.text.strip()) > 50:
+                corrected_srt = response.text.strip()
+                log("SUCCESS", "✅ Step 2.2: Format corrected with Gemini-2.0-flash")
+                return True, corrected_srt, "Format corrected with Gemini-2.0-flash"
+            else:
+                log("WARNING", "⚠️ Step 2.2: Gemini-2.0-flash returned empty/short response")
+                
+        except Exception as e:
+            log("WARNING", f"⚠️ Step 2.2: Gemini-2.0-flash failed: {str(e)}")
+        
+        # 🔥 BƯỚC 2.3: Sử dụng raw subtitle từ Step 1
+        log("INFO", "🔧 Step 2.3: Using raw subtitle from Step 1 (no format correction)")
+        return True, raw_subtitle, "No format correction applied - using raw output"
             
     except Exception as e:
-        log("WARNING", f"⚠️ Step 2: Format correction failed: {str(e)}")
+        log("WARNING", f"⚠️ Step 2: Format correction error: {str(e)}")
         log("INFO", "📝 Step 2: Using original subtitle without format correction")
         return True, raw_subtitle, f"Format correction failed, using original: {str(e)}"
 
 
 
 def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str, 
-                               target_lang: str, words_per_line: int = None, 
-                               ffmpeg_path: str = None, log_callback=None) -> Tuple[bool, str, str]:
+                                       target_lang: str, words_per_line: int = None, 
+                                       ffmpeg_path: str = None, log_callback=None) -> Tuple[bool, str, str]:
     """
-    Enhanced two-step subtitle generation pipeline with API fallback và SRT format fix
-    
-    Args:
-        video_path: Path to video file
-        api_key: Primary Google AI API key
-        source_lang: Source language (with emoji flags)
-        target_lang: Target language (with emoji flags)
-        words_per_line: Ignored in this version
-        ffmpeg_path: Path to FFmpeg executable
-        log_callback: Function to call for logging
-    
-    Returns:
-        Tuple of (success: bool, srt_content: str, message: str)
+    🔥 ENHANCED: Two-step subtitle generation với multiple fallback strategies
     """
     
     def log(level, message):
@@ -346,82 +457,48 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
             
             log("SUCCESS", "✅ Audio extracted successfully")
             
-            # Prepare API keys for fallback
-            api_keys_to_try = [api_key]  # Start with primary key
+            # 🔥 ENHANCED STEP 1: Multiple fallback strategies
+            log("INFO", "🤖 Starting Enhanced Step 1: Subtitle Generation with Fallbacks")
             
-            # Load backup keys if primary fails
-            backup_keys = load_api_keys()
-            for backup_key in backup_keys:
-                if backup_key != api_key and backup_key not in api_keys_to_try:
-                    api_keys_to_try.append(backup_key)
+            step1_success, raw_subtitle, step1_message = generate_subtitles_step1(
+                temp_audio, api_key, source_lang, target_lang, log_callback
+            )
             
-            log("INFO", f"🔑 Available API keys: {len(api_keys_to_try)} total")
-            
-            # Try up to 3 API keys for Step 1
-            step1_success = False
-            raw_subtitle = ""
-            step1_message = ""
-            
-            for attempt, current_api_key in enumerate(api_keys_to_try[:3], 1):
-                log("INFO", f"🔄 Step 1 Attempt {attempt}/3 with key: {current_api_key[:10]}...{current_api_key[-4:]}")
-                
-                # Test API key first
-                if not test_api_key_simple(current_api_key, log_callback):
-                    log("WARNING", f"⚠️ API key {attempt} failed validation, trying next...")
-                    continue
-                
-                # Try Step 1: Subtitle generation
-                step1_success, raw_subtitle, step1_message = generate_subtitles_step1(
-                    temp_audio, current_api_key, source_lang, target_lang, log_callback
-                )
-                
-                if step1_success:
-                    log("SUCCESS", f"✅ Step 1 successful with API key {attempt}")
-                    api_key = current_api_key  # Use this key for Step 2
-                    break
-                else:
-                    log("ERROR", f"❌ Step 1 failed with API key {attempt}: {step1_message}")
-                    if attempt < 3:
-                        log("INFO", "🔄 Trying next API key...")
-            
-            # Check if Step 1 succeeded
             if not step1_success:
-                return False, "", f"Step 1 failed with all {min(3, len(api_keys_to_try))} API keys"
+                return False, "", f"Enhanced Step 1 failed: {step1_message}"
             
             # Basic validation of Step 1 output
             if not raw_subtitle or len(raw_subtitle.strip()) < 10:
                 return False, "", "Step 1 produced empty or too short subtitle content"
             
-            if "1\n" not in raw_subtitle or "-->" not in raw_subtitle:
-                log("WARNING", "⚠️ Step 1 output doesn't look like SRT format, proceeding anyway...")
+            log("INFO", f"📝 Enhanced Step 1 complete. Subtitle length: {len(raw_subtitle)} characters")
+            log("SUCCESS", f"✅ Step 1 Result: {step1_message}")
             
-            log("INFO", f"📝 Step 1 complete. Subtitle length: {len(raw_subtitle)} characters")
-            
-            # Step 2: Format correction with Gemini-2.5-flash
-            log("INFO", "🔧 Starting Step 2: Format correction...")
+            # 🔥 ENHANCED STEP 2: Format correction with fallbacks
+            log("INFO", "🔧 Starting Enhanced Step 2: Format Correction with Fallbacks")
             
             step2_success, final_subtitle, step2_message = generate_subtitles_step2(
                 raw_subtitle, api_key, log_callback
             )
             
             if step2_success:
-                log("SUCCESS", f"🎉 Two-step process complete!")
+                log("SUCCESS", f"🎉 Enhanced two-step process complete!")
                 log("INFO", f"📋 Final result: {step2_message}")
                 
-                # 🔥 NEW: Fix SRT format cuối cùng
+                # 🔥 FINAL: Fix SRT format
                 if final_subtitle and len(final_subtitle.strip()) > 10:
                     log("INFO", "🔧 Applying final SRT timestamp format fix...")
                     final_subtitle_fixed = fix_srt_timestamps(final_subtitle, log_callback)
                     
-                    return True, final_subtitle_fixed, f"Two-step success + format fix: {step1_message} + {step2_message}"
+                    return True, final_subtitle_fixed, f"Enhanced success: {step1_message} + {step2_message}"
                 else:
                     log("WARNING", "⚠️ Final subtitle is empty, using Step 1 output")
                     raw_subtitle_fixed = fix_srt_timestamps(raw_subtitle, log_callback)
-                    return True, raw_subtitle_fixed, f"Step 1 only + format fix: {step1_message}"
+                    return True, raw_subtitle_fixed, f"Enhanced Step 1 only: {step1_message}"
             else:
-                log("WARNING", "⚠️ Step 2 failed, using Step 1 output with format fix")
+                log("WARNING", "⚠️ Enhanced Step 2 failed, using Step 1 output with format fix")
                 raw_subtitle_fixed = fix_srt_timestamps(raw_subtitle, log_callback)
-                return True, raw_subtitle_fixed, f"Step 1 only + format fix: {step1_message}"
+                return True, raw_subtitle_fixed, f"Enhanced Step 1 only: {step1_message}"
                 
         finally:
             # Cleanup temp audio file
@@ -436,10 +513,9 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
         log("ERROR", f"❌ Enhanced pipeline error: {str(e)}")
         import traceback
         log("ERROR", f"📋 Traceback: {traceback.format_exc()}")
-        return False, "", f"Pipeline error: {str(e)}"
+        return False, "", f"Enhanced pipeline error: {str(e)}"
 
 
-# 🔥 THAY THẾ hàm fix_srt_timestamps() trong gg_api/get_subtitle.py
 
 def fix_srt_timestamps(srt_content: str, log_callback=None) -> str:
     """
