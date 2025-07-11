@@ -11,8 +11,9 @@ import tempfile
 import time
 import json
 from typing import Optional, Tuple, List
+import re
 
-# Check if google-generativeai is available
+
 try:
     import google.generativeai as genai
     GENAI_AVAILABLE = True
@@ -104,6 +105,10 @@ def extract_audio_from_video(video_path: str, audio_output_path: str, ffmpeg_pat
             audio_output_path
         ]
         
+        # print("=================== FFmpeg Command ===================")
+        # print(' '.join(cmd))
+        # print("======================================================")
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         
         if result.returncode == 0 and os.path.exists(audio_output_path):
@@ -237,6 +242,8 @@ def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str,
             if response.text:
                 srt_content = response.text.strip()
                 log("SUCCESS", "✅ Step 1: Subtitles generated with Gemini-2.5-pro")
+                with open(os.path.join(os.path.dirname(__file__), f"gemini_step1_response_{int(time.time())}.txt"), "w", encoding="utf-8") as f:
+                    f.write(response.text)
                 return True, srt_content, "Generated with Gemini-2.5-pro"
             else:
                 log("ERROR", "❌ Step 1: No response from Gemini-2.5-pro")
@@ -263,24 +270,27 @@ def generate_subtitles_step2(raw_subtitle: str, api_key: str, log_callback=None)
     try:
         # Configure API (reuse same key)
         genai.configure(api_key=api_key)
-        log("INFO", "🔧 Step 2: Using Gemini-2.5-flash for format correction...")
+        log("INFO", "🔧 Step 2: Using Gemini-2.0-lite for format correction...")
         
         # Create correction prompt
         correction_prompt = create_format_correction_prompt(raw_subtitle)
         
         # Use Gemini-2.5-flash for correction
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash-lite")
         
         response = model.generate_content(
             correction_prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=0.0,  # Very low temperature for format correction
+                temperature=0.5,  
                 max_output_tokens=8192
             )
         )
         
         if response.text:
             corrected_srt = response.text.strip()
+
+            with open(os.path.join(os.path.dirname(__file__), f"gemini_step2_response_{int(time.time())}.txt"), "w", encoding="utf-8") as f:
+                f.write(response.text)
             log("SUCCESS", "✅ Step 2: Format corrected with Gemini-2.5-flash")
             return True, corrected_srt, "Format corrected with Gemini-2.5-flash"
         else:
