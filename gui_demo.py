@@ -899,38 +899,57 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def create_srt_file_from_content(self, srt_content: str, output_path: str) -> bool:
         """
-        🔥 UPDATED: Create SRT với COMPLETE timestamp fixing + validation
+        🔥 UPDATED: Create SRT file WITHOUT calling old fix_srt_timestamps
         """
         try:
-            self.add_log("INFO", f"📄 Creating SRT with COMPLETE fixes...")
+            self.add_log("INFO", f"📄 Creating SRT file with NEW format validation...")
             
-            # 🔥 FIXED: Gọi hàm fix hoàn toàn mới
-            fixed_content = fix_srt_timestamps(srt_content, self.add_log)
+            # 🔥 REMOVED: No longer call fix_srt_timestamps() - content should already be fixed
+            # OLD CODE REMOVED: fixed_content = fix_srt_timestamps(srt_content, self.add_log)
+            
+            # 🔥 NEW: Use content as-is (should already be processed by new Step 2 logic)
+            final_content = srt_content.strip()
+            
+            # Basic validation only
+            if not final_content or len(final_content) < 10:
+                self.add_log("ERROR", "❌ SRT content is empty or too short")
+                return False
+            
+            # Quick format check
+            if '-->' not in final_content:
+                self.add_log("WARNING", "⚠️ SRT content may not contain valid timestamps")
             
             # Ensure directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Write fixed content
+            # Write content directly
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(fixed_content)
+                f.write(final_content)
+                
+                # Ensure file ends with newline
+                if not final_content.endswith('\n'):
+                    f.write('\n')
             
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
                 
-                # Count blocks để report
-                blocks = fixed_content.strip().split('\n\n')
+                # Count blocks for reporting
+                blocks = final_content.strip().split('\n\n')
                 valid_blocks = [b for b in blocks if b.strip()]
                 
                 self.add_log("SUCCESS", f"✅ SRT file created: {file_size} bytes, {len(valid_blocks)} subtitle blocks")
                 
-                # Show preview của first 2 blocks
-                self.add_log("INFO", "📋 Final SRT preview:")
+                # Show preview of first 2 blocks
+                self.add_log("INFO", "📋 SRT preview (first 2 blocks):")
                 for i, block in enumerate(valid_blocks[:2]):
                     lines = block.strip().split('\n')
                     for j, line in enumerate(lines):
                         self.add_log("INFO", f"   {i+1}.{j+1}: {line}")
                     if i < len(valid_blocks) - 1:
-                        self.add_log("INFO", "   ...")
+                        self.add_log("INFO", "   ---")
+                
+                if len(valid_blocks) > 2:
+                    self.add_log("INFO", f"   ... and {len(valid_blocks) - 2} more blocks")
                 
                 return True
             else:
@@ -939,8 +958,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 
         except Exception as e:
             self.add_log("ERROR", f"❌ Error creating SRT: {str(e)}")
+            import traceback
+            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
             return False
-    
+        
     def process_subtitles_for_video(self, video_path: str, output_dir: str) -> Tuple[bool, str]:
         """
         🔥 FIXED: Xử lý subtitle với validation và error handling tốt hơn

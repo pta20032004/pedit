@@ -336,7 +336,7 @@ def generate_subtitles_step1(audio_path: str, api_key: str, source_lang: str,
 
 def generate_subtitles_step2(raw_subtitle: str, api_key: str, log_callback=None) -> Tuple[bool, str, str]:
     """
-    🔥 ENHANCED: Step 2 với fallback Gemini 2.0 Flash và improved prompt
+    🔥 NEW VERSION: Step 2 với custom format fixing logic thay thế hoàn toàn logic cũ
     """
     
     def log(level, message):
@@ -346,30 +346,39 @@ def generate_subtitles_step2(raw_subtitle: str, api_key: str, log_callback=None)
     if not GENAI_AVAILABLE:
         return False, "", "google-generativeai library not available"
     
+    if not raw_subtitle or len(raw_subtitle.strip()) < 10:
+        log("ERROR", "❌ Step 2: Raw subtitle is empty or too short")
+        return False, "", "Raw subtitle is empty"
+    
     try:
         # Configure API
         genai.configure(api_key=api_key)
-        log("INFO", "🔧 Step 2: Enhanced format correction starting...")
+        log("INFO", "🔧 Step 2: Starting NEW format correction with custom logic...")
         
-        # 🔥 IMPROVED PROMPT
-        improved_prompt = f"""Convert the following passage into standard .srt format, for example:
+        # 🔥 IMPROVED PROMPT for better SRT format
+        improved_prompt = f"""Convert the following text into proper .srt format. Requirements:
+
+1. Sequential numbering: 1, 2, 3, 4...
+2. Timestamp format: HH:MM:SS,mmm --> HH:MM:SS,mmm (exactly this format)
+3. Subtitle text on separate lines
+4. Blank line between each subtitle block
+
+Example format:
 1
-00:00:03,500 --> 00:00:06,008
-Subtitle text here
+00:00:00,000 --> 00:00:03,500
+First subtitle text here
 
-2  
-00:00:06,008 --> 00:00:10,000
-Next subtitle text
+2
+00:00:03,500 --> 00:00:07,200
+Second subtitle text here
 
-with each block separated by one line.
-Output in proper .srt file format.
+Output ONLY the corrected .srt content, no explanations:
 
-Content to convert:
 {raw_subtitle}
 """
         
-        # 🔥 BƯỚC 2.1: Thử Gemini-2.0-flash-lite trước
-        log("INFO", "🔧 Step 2.1: Trying Gemini-2.0-flash-lite for format correction...")
+        # 🔥 TRY GEMINI-2.0-FLASH-LITE FIRST
+        log("INFO", "🔧 Step 2.1: Trying Gemini-2.0-flash-lite for initial correction...")
         
         try:
             model = genai.GenerativeModel("gemini-2.0-flash-lite")
@@ -377,23 +386,41 @@ Content to convert:
             response = model.generate_content(
                 improved_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
+                    temperature=0.2,  # Lower temperature for more consistent formatting
                     max_output_tokens=8192
                 )
             )
             
             if response.text and len(response.text.strip()) > 50:
-                corrected_srt = response.text.strip()
-                log("SUCCESS", "✅ Step 2.1: Format corrected with Gemini-2.0-flash-lite")
-                return True, corrected_srt, "Format corrected with Gemini-2.0-flash-lite"
+                gemini_output = response.text.strip()
+                log("SUCCESS", "✅ Step 2.1: Initial format correction completed")
+                
+                # 🔥 APPLY NEW CUSTOM FORMAT FIXING LOGIC
+                log("INFO", "🔧 Step 2.2: Applying NEW custom format fixing logic...")
+                
+                try:
+                    final_corrected = fix_errors_format(gemini_output)
+                    log("SUCCESS", "✅ Step 2.2: NEW custom format fixing completed")
+                    
+                    # Quick validation
+                    if len(final_corrected.strip()) > 20 and '-->' in final_corrected:
+                        return True, final_corrected, "Format corrected with Gemini + NEW custom logic"
+                    else:
+                        log("WARNING", "⚠️ Step 2.2: Custom fixing resulted in invalid content")
+                        
+                except Exception as fix_error:
+                    log("WARNING", f"⚠️ Step 2.2: Custom fixing failed: {str(fix_error)}")
+                    # Fallback to Gemini output if custom fixing fails
+                    return True, gemini_output, f"Gemini correction only (custom fix failed): {str(fix_error)}"
+                    
             else:
                 log("WARNING", "⚠️ Step 2.1: Gemini-2.0-flash-lite returned empty/short response")
                 
-        except Exception as e:
-            log("WARNING", f"⚠️ Step 2.1: Gemini-2.0-flash-lite failed: {str(e)}")
+        except Exception as gemini_error:
+            log("WARNING", f"⚠️ Step 2.1: Gemini-2.0-flash-lite failed: {str(gemini_error)}")
         
-        # 🔥 BƯỚC 2.2: Fallback to Gemini-2.0-flash
-        log("INFO", "🔧 Step 2.2: Fallback to Gemini-2.0-flash...")
+        # 🔥 FALLBACK 1: Try Gemini-2.0-flash (regular)
+        log("INFO", "🔧 Step 2.3: Fallback to Gemini-2.0-flash...")
         
         try:
             model = genai.GenerativeModel("gemini-2.0-flash")
@@ -401,37 +428,273 @@ Content to convert:
             response = model.generate_content(
                 improved_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
+                    temperature=0.2,
                     max_output_tokens=8192
                 )
             )
             
             if response.text and len(response.text.strip()) > 50:
-                corrected_srt = response.text.strip()
-                log("SUCCESS", "✅ Step 2.2: Format corrected with Gemini-2.0-flash")
-                return True, corrected_srt, "Format corrected with Gemini-2.0-flash"
-            else:
-                log("WARNING", "⚠️ Step 2.2: Gemini-2.0-flash returned empty/short response")
+                gemini_output = response.text.strip()
+                log("SUCCESS", "✅ Step 2.3: Gemini-2.0-flash correction completed")
                 
+                # Apply custom fixing
+                try:
+                    final_corrected = fix_errors_format(gemini_output)
+                    log("SUCCESS", "✅ Step 2.3: Custom fixing applied to Gemini-2.0-flash output")
+                    return True, final_corrected, "Format corrected with Gemini-2.0-flash + custom logic"
+                except Exception as fix_error:
+                    log("WARNING", f"⚠️ Step 2.3: Custom fixing failed: {str(fix_error)}")
+                    return True, gemini_output, f"Gemini-2.0-flash only: {str(fix_error)}"
+                    
         except Exception as e:
-            log("WARNING", f"⚠️ Step 2.2: Gemini-2.0-flash failed: {str(e)}")
+            log("WARNING", f"⚠️ Step 2.3: Gemini-2.0-flash failed: {str(e)}")
         
-        # 🔥 BƯỚC 2.3: Sử dụng raw subtitle từ Step 1
-        log("INFO", "🔧 Step 2.3: Using raw subtitle from Step 1 (no format correction)")
+        # 🔥 FALLBACK 2: Direct custom fixing on raw subtitle
+        log("INFO", "🔧 Step 2.4: Applying NEW custom format fixing directly to raw subtitle...")
+        
+        try:
+            final_corrected = fix_errors_format(raw_subtitle)
+            log("SUCCESS", "✅ Step 2.4: NEW custom format fixing applied to raw subtitle")
+            
+            # Basic validation
+            if len(final_corrected.strip()) > 20:
+                return True, final_corrected, "Format corrected with NEW custom logic only"
+            else:
+                log("WARNING", "⚠️ Step 2.4: Custom fixing resulted in too short content")
+                
+        except Exception as fix_error:
+            log("ERROR", f"❌ Step 2.4: Direct custom fixing failed: {str(fix_error)}")
+        
+        # 🔥 LAST RESORT: Return raw subtitle
+        log("WARNING", "⚠️ Step 2: All correction methods failed, using raw subtitle")
         return True, raw_subtitle, "No format correction applied - using raw output"
             
     except Exception as e:
-        log("WARNING", f"⚠️ Step 2: Format correction error: {str(e)}")
-        log("INFO", "📝 Step 2: Using original subtitle without format correction")
-        return True, raw_subtitle, f"Format correction failed, using original: {str(e)}"
+        log("ERROR", f"❌ Step 2: Critical format correction error: {str(e)}")
+        log("INFO", "📝 Step 2: Using raw subtitle as emergency fallback...")
+        
+        # Emergency fallback
+        try:
+            emergency_corrected = fix_errors_format(raw_subtitle)
+            return True, emergency_corrected, f"Emergency custom fixing: {str(e)}"
+        except Exception as emergency_error:
+            log("ERROR", f"❌ Step 2: Emergency fixing also failed: {str(emergency_error)}")
+            return True, raw_subtitle, f"Raw subtitle returned due to errors: {str(e)}"
+        
+def errors_info_and_fix_format(text):
+    """
+    Phân tích và fix các lỗi format SRT theo logic mới:
+    1. Xóa markdown code blocks ```srt ... ```
+    2. Thêm dòng trống giữa các blocks
+    """
+    lines = text.split('\n')
+    
+    # 🔥 BƯỚC 1: Xóa markdown code blocks
+    if lines and lines[0].strip() == "```srt":
+        lines = lines[1:]
+        print("✅ Removed opening ```srt marker")
+    
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+        print("✅ Removed closing ``` marker")
+    
+    # 🔥 BƯỚC 2: Thêm dòng trống giữa các blocks
+    fixed_lines = []
+    i = 0
+    
+    while i < len(lines):
+        current_line = lines[i].strip()
+        
+        # Kiểm tra nếu là số block (1, 2, 3, ...)
+        if current_line.isdigit():
+            block_number = int(current_line)
+            
+            # Nếu không phải block đầu tiên và dòng trước không trống
+            if block_number > 1 and i > 0 and lines[i-1].strip() != "":
+                fixed_lines.append("")  # Thêm dòng trống
+                print(f"✅ Added blank line before block {block_number}")
+        
+        fixed_lines.append(lines[i])
+        i += 1
+    
+    return '\n'.join(fixed_lines)
 
 
+def fix_timestamp_format(timestamp_str):
+    """
+    Fix timestamp theo ĐÚNG 5 rules của bạn
+    """
+    timestamp = timestamp_str.strip()
+    original = timestamp_str
+    
+    # 🔥 RULE 3.1: Truncate milliseconds > 3 digits
+    if ',' in timestamp:
+        time_part, ms_part = timestamp.split(',', 1)
+        if len(ms_part) > 3:
+            ms_part = ms_part[:3]  # Xóa các chữ số thừa
+            timestamp = f"{time_part},{ms_part}"
+            print(f"✅ 3.1: Truncated milliseconds: {original} → {timestamp}")
+    
+    # Tách lại sau khi truncate
+    if ',' in timestamp:
+        time_part, ms_part = timestamp.split(',', 1)
+    else:
+        time_part = timestamp
+        ms_part = "000"
+    
+    time_segments = time_part.split(':')
+    
+    # 🔥 RULE 3.2: aa:bb:ccc hoặc aa:bb,ccc → 00:aa:bb,ccc
+    if len(time_segments) == 2:
+        # Case: aa:bb,ccc (đã có comma)
+        aa, bb = time_segments
+        fixed_timestamp = f"00:{aa.zfill(2)}:{bb.zfill(2)},{ms_part}"
+        print(f"✅ 3.2: aa:bb,ccc → 00:aa:bb,ccc: {original} → {fixed_timestamp}")
+        return fixed_timestamp
+        
+    elif len(time_segments) == 3:
+        aa, bb, cc = time_segments
+        
+        # 🔥 CHECK: Có phải aa:bb:ccc format không?
+        if len(cc) == 3 and cc.isdigit():
+            # aa:bb:ccc → 00:aa:bb,ccc
+            fixed_timestamp = f"00:{aa.zfill(2)}:{bb.zfill(2)},{cc}"
+            print(f"✅ 3.2: aa:bb:ccc → 00:aa:bb,ccc: {original} → {fixed_timestamp}")
+            return fixed_timestamp
+        else:
+            # Normal HH:MM:SS format, tiếp tục xử lý rule 3.5
+            pass
+    
+    # 🔥 RULE 3.3: aa:bb:cc:ddd → aa:bb:cc,ddd
+    elif len(time_segments) == 4:
+        aa, bb, cc, ddd = time_segments
+        fixed_timestamp = f"{aa}:{bb}:{cc},{ddd}"
+        print(f"✅ 3.3: aa:bb:cc:ddd → aa:bb:cc,ddd: {original} → {fixed_timestamp}")
+        timestamp = fixed_timestamp
+        time_segments = [aa, bb, cc]
+        ms_part = ddd
+    
+    # 🔥 RULE 3.4: aa:bb:cc:dd:eee → bb:cc:dd,eee
+    elif len(time_segments) == 5:
+        aa, bb, cc, dd, eee = time_segments
+        fixed_timestamp = f"{bb}:{cc}:{dd},{eee}"
+        print(f"✅ 3.4: aa:bb:cc:dd:eee → bb:cc:dd,eee: {original} → {fixed_timestamp}")
+        timestamp = fixed_timestamp
+        time_segments = [bb, cc, dd]
+        ms_part = eee
+    
+    # 🔥 RULE 3.5: Pad single digits với zeros
+    if len(time_segments) >= 3:
+        hh, mm, ss = time_segments[0], time_segments[1], time_segments[2]
+        
+        # Pad mỗi segment thành 2 chữ số
+        hh = hh.zfill(2)
+        mm = mm.zfill(2)
+        ss = ss.zfill(2)
+        
+        # Pad milliseconds thành 3 chữ số
+        ms_part = ms_part.ljust(3, '0')[:3]
+        
+        final_timestamp = f"{hh}:{mm}:{ss},{ms_part}"
+        
+        if final_timestamp != original:
+            print(f"✅ 3.5: Padded zeros: {original} → {final_timestamp}")
+        
+        return final_timestamp
+    
+    # Fallback: return với basic formatting
+    return f"00:00:00,{ms_part.ljust(3, '0')[:3]}"
+
+def fix_errors_format(text):
+    """
+    Main function để fix tất cả lỗi format với iterative approach
+    """
+    print("🔄 Starting SRT format fixing process...")
+    
+    # Bước 1 & 2: Fix markdown và spacing
+    text = errors_info_and_fix_format(text)
+    
+    # Bước 3: Iterative timestamp fixing
+    test = True
+    iter_count = 0
+    max_iterations = 100
+    
+    while test and iter_count < max_iterations:
+        iter_count += 1
+        print(f"🔄 Iteration {iter_count}: Scanning for timestamp errors...")
+        
+        lines = text.split('\n')
+        number_errors = 0
+        line_start = 1
+        fixed_lines = []
+        
+        i = 0
+        while i < len(lines):
+            current_line = lines[i].strip()
+            
+            # Kiểm tra nếu là số block
+            if current_line.isdigit() and int(current_line) == line_start:
+                # Tìm thấy block mới
+                fixed_lines.append(lines[i])  # Thêm số block
+                
+                # Kiểm tra dòng timestamp (dòng tiếp theo)
+                if i + 1 < len(lines):
+                    timestamp_line = lines[i + 1].strip()
+                    
+                    # Kiểm tra format "xxxx --> yyyy" 
+                    if '-->' in timestamp_line:
+                        parts = timestamp_line.split('-->')
+                        if len(parts) == 2:
+                            start_time = parts[0].strip()
+                            end_time = parts[1].strip()
+                            
+                            # Fix cả hai timestamps
+                            fixed_start = fix_timestamp_format(start_time)
+                            fixed_end = fix_timestamp_format(end_time)
+                            
+                            fixed_timestamp_line = f"{fixed_start} --> {fixed_end}"
+                            
+                            # Kiểm tra nếu có thay đổi
+                            if fixed_timestamp_line != timestamp_line:
+                                number_errors += 1
+                                print(f"🔧 Fixed block {line_start}: {timestamp_line} → {fixed_timestamp_line}")
+                            
+                            fixed_lines.append(fixed_timestamp_line)
+                            i += 2  # Skip timestamp line đã xử lý
+                        else:
+                            fixed_lines.append(lines[i + 1])
+                            i += 2
+                    else:
+                        fixed_lines.append(lines[i + 1])
+                        i += 2
+                else:
+                    i += 1
+                
+                line_start += 1
+            else:
+                fixed_lines.append(lines[i])
+                i += 1
+        
+        # Cập nhật text với fixes
+        text = '\n'.join(fixed_lines)
+        
+        print(f"📊 Iteration {iter_count}: Found and fixed {number_errors} timestamp errors")
+        
+        # Nếu không có lỗi nào, dừng loop
+        if number_errors == 0:
+            test = False
+            print("✅ No more errors found. Format fixing complete!")
+    
+    if iter_count >= max_iterations:
+        print(f"⚠️ Reached maximum iterations ({max_iterations}). Some errors may remain.")
+    
+    return text
 
 def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str, 
                                        target_lang: str, words_per_line: int = None, 
                                        ffmpeg_path: str = None, log_callback=None) -> Tuple[bool, str, str]:
     """
-    🔥 ENHANCED: Two-step subtitle generation với multiple fallback strategies
+    🔥 UPDATED: Two-step subtitle generation với NEW custom format fixing logic
     """
     
     def log(level, message):
@@ -474,31 +737,46 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
             log("INFO", f"📝 Enhanced Step 1 complete. Subtitle length: {len(raw_subtitle)} characters")
             log("SUCCESS", f"✅ Step 1 Result: {step1_message}")
             
-            # 🔥 ENHANCED STEP 2: Format correction with fallbacks
-            log("INFO", "🔧 Starting Enhanced Step 2: Format Correction with Fallbacks")
+            # 🔥 NEW STEP 2: Enhanced format correction with NEW custom logic
+            log("INFO", "🔧 Starting NEW Step 2: Enhanced Format Correction with Custom Logic")
             
             step2_success, final_subtitle, step2_message = generate_subtitles_step2(
                 raw_subtitle, api_key, log_callback
             )
             
             if step2_success:
-                log("SUCCESS", f"🎉 Enhanced two-step process complete!")
+                log("SUCCESS", f"🎉 NEW enhanced two-step process complete!")
                 log("INFO", f"📋 Final result: {step2_message}")
                 
-                # 🔥 FINAL: Fix SRT format
+                # 🔥 REMOVED: No longer call fix_srt_timestamps() - NEW logic handles everything
+                # OLD CODE REMOVED: final_subtitle_fixed = fix_srt_timestamps(final_subtitle, log_callback)
+                
+                # 🔥 NEW: Direct return of Step 2 output (already fixed by new logic)
                 if final_subtitle and len(final_subtitle.strip()) > 10:
-                    log("INFO", "🔧 Applying final SRT timestamp format fix...")
-                    final_subtitle_fixed = fix_srt_timestamps(final_subtitle, log_callback)
-                    
-                    return True, final_subtitle_fixed, f"Enhanced success: {step1_message} + {step2_message}"
+                    log("SUCCESS", "✅ NEW format fixing complete - returning Step 2 output")
+                    return True, final_subtitle, f"NEW Enhanced success: {step1_message} + {step2_message}"
                 else:
-                    log("WARNING", "⚠️ Final subtitle is empty, using Step 1 output")
-                    raw_subtitle_fixed = fix_srt_timestamps(raw_subtitle, log_callback)
-                    return True, raw_subtitle_fixed, f"Enhanced Step 1 only: {step1_message}"
+                    log("WARNING", "⚠️ Final subtitle is empty, using Step 1 output with NEW fixing")
+                    
+                    # Apply NEW custom fixing to Step 1 output as fallback
+                    try:
+                        raw_subtitle_fixed = fix_errors_format(raw_subtitle)
+                        log("SUCCESS", "✅ NEW custom fixing applied to Step 1 output")
+                        return True, raw_subtitle_fixed, f"NEW Enhanced Step 1 with custom fixing: {step1_message}"
+                    except Exception as fix_error:
+                        log("WARNING", f"⚠️ NEW custom fixing failed: {str(fix_error)}")
+                        return True, raw_subtitle, f"NEW Enhanced Step 1 only: {step1_message}"
             else:
-                log("WARNING", "⚠️ Enhanced Step 2 failed, using Step 1 output with format fix")
-                raw_subtitle_fixed = fix_srt_timestamps(raw_subtitle, log_callback)
-                return True, raw_subtitle_fixed, f"Enhanced Step 1 only: {step1_message}"
+                log("WARNING", "⚠️ NEW Step 2 failed, using Step 1 output with NEW custom fixing")
+                
+                # Apply NEW custom fixing to Step 1 output
+                try:
+                    raw_subtitle_fixed = fix_errors_format(raw_subtitle)
+                    log("SUCCESS", "✅ NEW custom fixing applied to Step 1 output")
+                    return True, raw_subtitle_fixed, f"NEW Enhanced Step 1 with custom fixing: {step1_message}"
+                except Exception as fix_error:
+                    log("WARNING", f"⚠️ NEW custom fixing failed: {str(fix_error)}")
+                    return True, raw_subtitle, f"NEW Enhanced Step 1 only: {step1_message}"
                 
         finally:
             # Cleanup temp audio file
@@ -510,248 +788,10 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
                     pass
             
     except Exception as e:
-        log("ERROR", f"❌ Enhanced pipeline error: {str(e)}")
+        log("ERROR", f"❌ NEW Enhanced pipeline error: {str(e)}")
         import traceback
         log("ERROR", f"📋 Traceback: {traceback.format_exc()}")
-        return False, "", f"Enhanced pipeline error: {str(e)}"
-
-
-
-def fix_srt_timestamps(srt_content: str, log_callback=None) -> str:
-    """
-    🔥 FIXED: Fix SRT timestamps hoàn toàn - MULTIPLE PASSES + VALIDATION
-    """
-    if log_callback:
-        log_callback("INFO", "🔧 Starting COMPLETE SRT timestamp fix...")
-    
-    try:
-        # Step 1: Multiple passes để fix timestamps
-        content = _fix_timestamps_multiple_passes(srt_content, log_callback)
-        
-        # Step 2: Fix spacing giữa blocks  
-        content = _fix_srt_spacing(content, log_callback)
-        
-        # Step 3: Validation cuối cùng
-        errors = _validate_srt_format(content, log_callback)
-        
-        if errors:
-            if log_callback:
-                log_callback("WARNING", f"⚠️ Found {len(errors)} validation errors, using best effort result")
-                for error in errors[:3]:  # Show first 3 errors
-                    log_callback("WARNING", f"   - {error}")
-            # Vẫn return result thay vì reject hoàn toàn
-            return content
-        else:
-            if log_callback:
-                log_callback("SUCCESS", "✅ SRT format validation PASSED!")
-            return content
-            
-    except Exception as e:
-        if log_callback:
-            log_callback("ERROR", f"❌ Error in complete SRT fix: {str(e)}")
-        return srt_content  # Fallback to original
-
-
-def _parse_timestamp_intelligent(timestamp_str: str) -> tuple:
-    """Parse timestamp thông minh với validation"""
-    
-    # Clean input
-    ts = timestamp_str.strip().replace('.', ',')
-    
-    # Extract millisecond
-    if ',' in ts:
-        time_part, ms_part = ts.split(',', 1)  # Only split on first comma
-        # Pad millisecond to 3 digits, truncate if longer
-        ms_part = ms_part.ljust(3, '0')[:3]
-        try:
-            ms = int(ms_part)
-        except ValueError:
-            ms = 0
-    else:
-        time_part = ts
-        ms = 0
-    
-    # Parse time components
-    parts = time_part.split(':')
-    
-    try:
-        if len(parts) == 2:
-            # MM:SS format
-            minutes, seconds = [int(p) for p in parts]
-            hours = 0
-        elif len(parts) == 3:
-            # HH:MM:SS format
-            hours, minutes, seconds = [int(p) for p in parts]
-        else:
-            raise ValueError(f"Invalid time format: {len(parts)} parts")
-        
-        # Validation với auto-correction
-        if not (0 <= hours <= 23):
-            hours = min(23, max(0, hours))
-        if not (0 <= minutes <= 59):
-            minutes = min(59, max(0, minutes))
-        if not (0 <= seconds <= 59):
-            seconds = min(59, max(0, seconds))
-        if not (0 <= ms <= 999):
-            ms = min(999, max(0, ms))
-            
-        return hours, minutes, seconds, ms
-        
-    except ValueError as e:
-        # Fallback: parse lỗi thì trả về 0:0:0,0
-        return 0, 0, 0, 0
-
-
-def _format_timestamp(hours: int, minutes: int, seconds: int, ms: int) -> str:
-    """Format timestamp thành chuẩn SRT"""
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
-
-
-def _fix_timestamps_multiple_passes(srt_content: str, log_callback=None, max_passes: int = 3) -> str:
-    """Fix timestamps với multiple passes"""
-    
-    content = srt_content
-    total_fixes = 0
-    
-    # Pattern để match tất cả timestamp formats
-    timestamp_pattern = r'(\d{1,2}(?::\d{1,2})?:\d{1,2}(?:[.,]\d{1,3})?)\s*-->\s*(\d{1,2}(?::\d{1,2})?:\d{1,2}(?:[.,]\d{1,3})?)'
-    
-    for pass_num in range(max_passes):
-        if log_callback:
-            log_callback("INFO", f"🔄 Timestamp fix pass {pass_num + 1}/{max_passes}")
-        
-        # Find all timestamp lines trong pass này
-        matches = list(re.finditer(timestamp_pattern, content))
-        
-        if not matches:
-            if log_callback:
-                log_callback("INFO", f"   ✅ No timestamps found to fix in pass {pass_num + 1}")
-            break
-        
-        fixes_in_pass = 0
-        
-        # Process từ cuối lên đầu để avoid index shifting
-        for match in reversed(matches):
-            start_ts, end_ts = match.groups()
-            
-            try:
-                # Parse both timestamps
-                start_h, start_m, start_s, start_ms = _parse_timestamp_intelligent(start_ts)
-                end_h, end_m, end_s, end_ms = _parse_timestamp_intelligent(end_ts)
-                
-                # Format properly
-                fixed_start = _format_timestamp(start_h, start_m, start_s, start_ms)
-                fixed_end = _format_timestamp(end_h, end_m, end_s, end_ms)
-                
-                # Create fixed line
-                original_line = match.group(0)
-                fixed_line = f"{fixed_start} --> {fixed_end}"
-                
-                if original_line != fixed_line:
-                    # Replace trong content
-                    content = content[:match.start()] + fixed_line + content[match.end():]
-                    fixes_in_pass += 1
-                    
-                    if log_callback and fixes_in_pass <= 5:  # Log first 5 fixes
-                        log_callback("INFO", f"   ✅ {original_line} → {fixed_line}")
-                        
-            except Exception as e:
-                if log_callback:
-                    log_callback("WARNING", f"   ⚠️ Cannot fix '{start_ts} --> {end_ts}': {str(e)}")
-        
-        total_fixes += fixes_in_pass
-        
-        if log_callback:
-            log_callback("INFO", f"   📊 Pass {pass_num + 1}: {fixes_in_pass} fixes made")
-        
-        if fixes_in_pass == 0:
-            if log_callback:
-                log_callback("INFO", "   ✅ No more fixes needed")
-            break
-    
-    if log_callback:
-        log_callback("SUCCESS", f"✅ Total timestamp fixes: {total_fixes}")
-    
-    return content
-
-
-def _fix_srt_spacing(srt_content: str, log_callback=None) -> str:
-    """Fix spacing giữa subtitle blocks"""
-    
-    if log_callback:
-        log_callback("INFO", "📐 Fixing subtitle block spacing...")
-    
-    # Split thành blocks, loại bỏ empty blocks
-    blocks = []
-    for block in re.split(r'\n\s*\n', srt_content.strip()):
-        block = block.strip()
-        if block:  # Skip empty blocks
-            blocks.append(block)
-    
-    if log_callback:
-        log_callback("INFO", f"   📋 Found {len(blocks)} subtitle blocks")
-    
-    # Join với exactly 2 newlines giữa mỗi block
-    fixed_content = '\n\n'.join(blocks)
-    
-    # Ensure content ends with single newline
-    if fixed_content and not fixed_content.endswith('\n'):
-        fixed_content += '\n'
-    
-    if log_callback:
-        log_callback("SUCCESS", "✅ Block spacing fixed")
-    
-    return fixed_content
-
-
-def _validate_srt_format(srt_content: str, log_callback=None) -> list:
-    """Validate SRT format và return list errors"""
-    
-    if log_callback:
-        log_callback("INFO", "🔍 Validating final SRT format...")
-    
-    blocks = srt_content.strip().split('\n\n')
-    errors = []
-    
-    # Standard timestamp pattern để validate
-    timestamp_pattern = r'^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$'
-    
-    for i, block in enumerate(blocks, 1):
-        if not block.strip():
-            continue
-            
-        lines = block.strip().split('\n')
-        
-        # Check minimum lines
-        if len(lines) < 3:
-            errors.append(f"Block {i}: Too few lines ({len(lines)}, need ≥3)")
-            continue
-        
-        # Check block number
-        try:
-            block_num = int(lines[0].strip())
-            if block_num != i:
-                errors.append(f"Block {i}: Wrong sequence number ({block_num})")
-        except ValueError:
-            errors.append(f"Block {i}: Invalid number '{lines[0].strip()}'")
-        
-        # Check timestamp format
-        timestamp_line = lines[1].strip()
-        if not re.match(timestamp_pattern, timestamp_line):
-            errors.append(f"Block {i}: Invalid timestamp '{timestamp_line}'")
-        
-        # Check có text content không
-        text_lines = [line.strip() for line in lines[2:] if line.strip()]
-        if not text_lines:
-            errors.append(f"Block {i}: No subtitle text content")
-    
-    if log_callback:
-        if errors:
-            log_callback("WARNING", f"⚠️ Validation found {len(errors)} issues")
-        else:
-            log_callback("SUCCESS", f"✅ Validation passed for {len(blocks)} blocks")
-    
-    return errors
+        return False, "", f"NEW Enhanced pipeline error: {str(e)}"
 
 def get_default_words_per_line(target_language: str) -> int:
     """Get default words per line for target language"""

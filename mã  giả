@@ -1,0 +1,43 @@
+def errors_info_and_fix_format(text): 
+  1. Ở line đầu tiên của file tồn tại dòng "```srt" và cuối file là dòng "```" => Tự động xóa đi, đẩy code phía dưới lên
+  2. Trừ dòng đầu (Số 1), trên mỗi con số bắt đầu của block không có một line trống để cách ra => Tự động cách ra
+  3. Dưới mỗi chữ số đại diện cho một block, xem xét mốc thời gian "xxxx -> yyyy", xét hai mốc xxxx và yyyy:
+	3.1. Xem xét hai cái chuỗi xxxx và yyyy, nếu sau dấu phẩy "," có > 3 chữ số thì tự động xóa các chữ thừa đó đi, ví dụ 00:00:02,0000 thì chuyển thành 00:00:02,000
+	3.2. Nếu chuỗi đang ở định dạng như sau aa:bb:ccc hoặc aa:bb,ccc thì chuyển thành 00:aa:bb,ccc, ví dụ 00:06,199 chuyển thành 00:00:06,199, 00:03:499 chuyển thành 00:00:03,499
+	3.3. Nếu chuỗi đang ở định dạng aa:bb:cc:ddd thì chuyển thành aa:bb:cc,ddd
+	3.4. Nếu chuỗi đang ở định dạng aa:bb:cc:dd:eee thì chuyển thành bb:cc:dd,eee
+	3.5. Nếu trước và sau dấu : chỉ có 1 chữ số hoặc trước dấu : đầu tiên hoặc trước dấu phẩy "," ở cuối, ví dụ, 00:00:6,eee thì thêm số 0 vào trước số đó, ví dụ 00:00:6,299 thành 00:00:06,299, hay 00:1:02,883 thành 00:01:02:883
+	
+
+def fix_errors_format(text):
+	test = True
+
+	- quét line đầu tiên và line cuối cùng: nếu mắc lỗi 1 ở errors_info_and_fix_format thì xử lí 
+	- quét một lượt qua từng block, nếu mắc phải lỗi 2 ở errors_info_and_fix_format thì xử lí như solution đã nêu ra
+	
+	line_start = 1
+	quantity = text.length
+	iter = 0
+	while test == True and iter <= 100: #quét một lượt qua mỗi block, dưới số thứ tự của block,
+		
+		iter = iter + 1
+		#Đếm lỗi
+		number_errors = 0
+		for i in range (0, quantity, 1):
+			
+			if lines[i] == line_start and (i != 0 and lines[i - 1] == line rỗng):
+				line_start = line_start + 1
+				
+				Bắt đầu check tất cả các lỗi 3.x của errors_info_and_fix_format và fix
+				Nếu gặp lỗi, number_errors = number_errors + 1
+		if number_errors == 0:
+			test = False
+		
+			
+			
+		
+
+
+
+
+	
