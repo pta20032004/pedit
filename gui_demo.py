@@ -64,7 +64,20 @@ import json
 import os
 import re
 
-
+# THÊM VÀO ĐẦU FILE gui_demo.py - SAU PHẦN IMPORT HIỆN TẠI
+try:
+    from source_text import (
+        process_source_text_batch,
+        extract_source_from_filename,
+        validate_font_file,
+        get_plus_jakarta_font_path,
+        add_source_text_to_video
+    )
+    SOURCE_TEXT_AVAILABLE = True
+    print("✅ Source text module loaded successfully")
+except ImportError as e:
+    SOURCE_TEXT_AVAILABLE = False
+    print(f"⚠️ Warning: Source text module not found: {str(e)}")
 try:
     from gg_api.get_subtitle import fix_srt_timestamps
     SUBTITLE_FIX_AVAILABLE = True
@@ -88,7 +101,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QProgressBar, QListWidget, QCheckBox, QSpinBox,
                             QComboBox, QFileDialog, QSplitter, QFrame,
                             QScrollArea, QSlider, QDoubleSpinBox, QTextBrowser,
-                            QListWidgetItem, QHeaderView, QTableWidget, QTableWidgetItem)
+                            QListWidgetItem, QHeaderView, QTableWidget, QTableWidgetItem,
+                            QRadioButton)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QPixmap, QPalette, QColor, QPainter, QPen, QBrush
 
@@ -1127,7 +1141,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     
     def setup_defaults(self):
-        """🔥 FIXED: Thiết lập giá trị mặc định chính xác với GUI sync test"""
+        """Setup default values with font validation"""
         try:
             # 1. MẶC ĐỊNH OUTPUT FOLDER LÀ "output"
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1147,20 +1161,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 self.chk_add_banner.setChecked(True)
                 self.add_log("INFO", "🖼️ Add Banner/Logo enabled by default")
             
-            #  3. BANNER POSITION VÀ SIZE 
+            # 3. BANNER POSITION VÀ SIZE 
             if hasattr(self, 'banner_x'):
                 self.banner_x.setValue(230)  # X position
-                self.add_log("INFO", f" Default banner X position: 230px")
+                self.add_log("INFO", f"📍 Default banner X position: 230px")
                 
             if hasattr(self, 'banner_y'):
                 self.banner_y.setValue(1400)  
-                self.add_log("INFO", f" Default banner Y position: 1400px")
+                self.add_log("INFO", f"📍 Default banner Y position: 1400px")
                 
             if hasattr(self, 'banner_height_ratio'):
-                self.banner_height_ratio.setValue(0.18)  # Height ratio - GIÁ TRỊ CỦA BẠN
+                self.banner_height_ratio.setValue(0.18)  # Height ratio
                 self.add_log("INFO", f"📏 Default banner height ratio: 0.18 (18% of video height)")
             
-            # 🔥 4. BANNER TIMING - TỪ GIÂY 5 ĐẾN GIÂY 12
+            # 4. BANNER TIMING - TỪ GIÂY 5 ĐẾN GIÂY 12
             if hasattr(self, 'banner_start_time'):
                 self.banner_start_time.setValue(5)  # Bắt đầu từ giây thứ 5
                 self.add_log("INFO", f"⏰ Default banner start time: 5 seconds")
@@ -1169,14 +1183,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 self.banner_end_time.setValue(12)  # Kết thúc ở giây thứ 12
                 self.add_log("INFO", f"⏰ Default banner end time: 12 seconds")
             
-            # 🔥 5. SUBTITLE DEFAULTS - QUAN TRỌNG CHO GUI SYNC
+            # 5. SUBTITLE DEFAULTS
             if hasattr(self, 'subtitle_size'):
                 self.subtitle_size.setValue(60)  # Font size mặc định
-                self.add_log("INFO", f"🔤 Default subtitle font size: 40px")
+                self.add_log("INFO", f"🔤 Default subtitle font size: 60px")
                 
             if hasattr(self, 'subtitle_y'):
                 self.subtitle_y.setValue(1400)  # Y position mặc định
-                self.add_log("INFO", f"📍 Default subtitle Y position: 1200px")
+                self.add_log("INFO", f"📍 Default subtitle Y position: 1400px")
                 
             if hasattr(self, 'subtitle_style'):
                 self.subtitle_style.setCurrentText("White with Shadow")  # Style mặc định
@@ -1197,18 +1211,50 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 self.chroma_color.setCurrentText("Green (0x00ff00)")
                 self.add_log("INFO", "🟢 Default chromakey color: Green")
             
-            # 🔥 8. MẶC ĐỊNH BẬT SUBTITLE
+            # 8. MẶC ĐỊNH BẬT SUBTITLE
             if hasattr(self, 'chk_add_subtitle'):
                 self.chk_add_subtitle.setChecked(True)
                 self.add_log("INFO", "📝 Add Subtitles enabled by default")
             
-            # 🔥 9. CẬP NHẬT PREVIEW NGAY SAU KHI SET DEFAULTS
+            if hasattr(self, 'chk_add_source'):
+                self.chk_add_source.setChecked(True)
+                self.add_log("INFO", " Add Source Text enabled by default")
+
+            # 9. SOURCE TEXT DEFAULTS
+            if hasattr(self, 'source_x'):
+                self.source_x.setValue(850)
+                self.add_log("INFO", f"📎 Default source X position: 50px")
+                
+            if hasattr(self, 'source_y'):
+                self.source_y.setValue(200)
+                self.add_log("INFO", f"📎 Default source Y position: 50px")
+                
+            if hasattr(self, 'source_font_size'):
+                self.source_font_size.setValue(30)
+                self.add_log("INFO", f"📎 Default source font size: 14px")
+                
+            if hasattr(self, 'source_font_color'):
+                self.source_font_color.setCurrentText("white")
+                self.add_log("INFO", f"📎 Default source font color: white")
+                
+            if hasattr(self, 'source_text'):
+                self.source_text.setText("@YourChannel")
+                self.add_log("INFO", f"📎 Default source text: @YourChannel")
+                
+            if hasattr(self, 'source_mode_custom'):
+                self.source_mode_custom.setChecked(True)
+                self.add_log("INFO", f"📎 Default source mode: Custom text")
+            
+            # 10. CHECK SOURCE TEXT SETUP
+            self.check_source_text_setup()
+            
+            # 11. CẬP NHẬT PREVIEW NGAY SAU KHI SET DEFAULTS
             QApplication.processEvents()  # Đảm bảo UI đã load xong
             if hasattr(self, '_update_preview_positions'):
                 self._update_preview_positions()
                 self.add_log("INFO", "🔄 Preview positions updated with new defaults")
             
-            # 🔥 10. TEST GUI SYNC - Đọc lại các giá trị để verify
+            # 12. TEST GUI SYNC - Đọc lại các giá trị để verify
             self.add_log("SUCCESS", "✅ GUI SYNC TEST - Verifying default values:")
             if hasattr(self, 'subtitle_size'):
                 actual_font = self.subtitle_size.value()
@@ -1220,14 +1266,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 actual_style = self.subtitle_style.currentText()
                 self.add_log("INFO", f"   🎨 Style verified: {actual_style}")
             
-            # 11. LOG TỔNG KẾT CÁC SETTINGS
+            # 13. LOG TỔNG KẾT CÁC SETTINGS
             self.add_log("SUCCESS", "✅ All default settings applied successfully:")
             self.add_log("INFO", "   🖼️ Banner: ENABLED")
             self.add_log("INFO", "   📍 Position: (230, 1400) pixels")
             self.add_log("INFO", "   📐 Size: 18% of video height")
             self.add_log("INFO", "   ⏰ Timing: 5-12 seconds (7 seconds duration)")
             self.add_log("INFO", "   🎭 Chromakey: ENABLED (Green removal)")
-            self.add_log("INFO", "   📝 Subtitle: ENABLED, 40px font, Y=1200px, White with Shadow")
+            self.add_log("INFO", "   📝 Subtitle: ENABLED, 60px font, Y=1400px, White with Shadow")
+            self.add_log("INFO", "   📎 Source: Custom mode, @YourChannel, (50,50), 14px, white")
             self.add_log("INFO", "   📁 Output: ./output folder")
             
         except Exception as e:
@@ -1320,46 +1367,51 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
     def _update_preview_positions(self):
-        """FIXED: Cập nhật preview với TikTok-safe subtitle positioning và GUI sync"""
+        """UPDATED: Cập nhật preview với source text universal mapping info"""
         if not hasattr(self, 'video_preview') or self.video_preview is None:
             return
 
         try:
-            # 🔥 FIXED: Lấy giá trị THỰC TẾ từ GUI controls với safety checks
+            # 🔥 Existing banner and subtitle code...
             real_banner_x = self.banner_x.value() if hasattr(self, 'banner_x') and self.banner_x is not None else 230
             real_banner_y = self.banner_y.value() if hasattr(self, 'banner_y') and self.banner_y is not None else 1400
             real_subtitle_y = self.subtitle_y.value() if hasattr(self, 'subtitle_y') and self.subtitle_y is not None else 1200
+            
+            # 🔥 UPDATED: Get source text values with enhanced info
             real_source_x = self.source_x.value() if hasattr(self, 'source_x') and self.source_x is not None else 50
             real_source_y = self.source_y.value() if hasattr(self, 'source_y') and self.source_y is not None else 50
             
-            # 🔥 ADDED: Lấy font size từ GUI để hiển thị trong preview
+            # Get additional info for logging
             gui_font_size = self.subtitle_size.value() if hasattr(self, 'subtitle_size') and self.subtitle_size is not None else 40
             gui_style = self.subtitle_style.currentText() if hasattr(self, 'subtitle_style') and self.subtitle_style is not None else "White with Shadow"
+            source_font_size = self.source_font_size.value() if hasattr(self, 'source_font_size') and self.source_font_size is not None else 14
+            source_color = self.source_font_color.currentText() if hasattr(self, 'source_font_color') and self.source_font_color is not None else "white"
             
-            # Tính kích thước banner thực tế với safety check
+            # Calculate banner dimensions
             banner_height_ratio = self.banner_height_ratio.value() if hasattr(self, 'banner_height_ratio') and self.banner_height_ratio is not None else 0.18
             real_banner_height = int(1920 * banner_height_ratio)
             real_banner_width = int(real_banner_height * 16/9)
             
-            # 🔥 SUBTITLE: Always use TikTok-safe area - SAME as processing function
+            # Subtitle safe area
             REFERENCE_WIDTH = 1080
             BASE_LEFT_MARGIN = 90
             BASE_RIGHT_MARGIN = 130
             
             subtitle_safe_left = BASE_LEFT_MARGIN
             subtitle_safe_width = REFERENCE_WIDTH - BASE_LEFT_MARGIN - BASE_RIGHT_MARGIN
-            subtitle_height = 80  # Default subtitle area height
+            subtitle_height = 80
             
-            # Cập nhật preview với tọa độ safe
+            # Update preview
             self.video_preview.update_from_real_coordinates('banner', real_banner_x, real_banner_y, real_banner_width, real_banner_height)
             self.video_preview.update_from_real_coordinates('subtitle', subtitle_safe_left, real_subtitle_y, subtitle_safe_width, subtitle_height)
             self.video_preview.update_from_real_coordinates('source', real_source_x, real_source_y)
             
-            # 🔥 LOG GUI VALUES FOR DEBUGGING
-            self.add_log("DEBUG", f"🔄 Preview updated with GUI values:")
+            # 🔥 ENHANCED LOGGING with mapping info
+            self.add_log("DEBUG", f"🔄 Preview updated with GUI values (with universal mapping info):")
             self.add_log("DEBUG", f"   📍 Banner: ({real_banner_x}, {real_banner_y}) {real_banner_width}x{real_banner_height}")
             self.add_log("DEBUG", f"   📝 Subtitle: Y={real_subtitle_y}, Font={gui_font_size}px, Style={gui_style}")
-            self.add_log("DEBUG", f"   📎 Source: ({real_source_x}, {real_source_y})")
+            self.add_log("DEBUG", f"   📎 Source: ({real_source_x}, {real_source_y}), Font={source_font_size}px, Color={source_color}")
+            self.add_log("DEBUG", f"   💡 Note: Source text will auto-scale for different video sizes")
             
         except Exception as e:
             self.add_log("ERROR", f"❌ Error updating preview positions: {str(e)}")
@@ -2104,7 +2156,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         preview_info.setAlignment(Qt.AlignCenter)
         preview_layout.addWidget(preview_info)
         
-        # START BUTTON VỚI SPINNER
+        # START BUTTON WITH SPINNER
         start_button_frame = QFrame()
         start_button_frame.setObjectName("startButtonFrame")
         start_button_layout = QHBoxLayout(start_button_frame)
@@ -2114,7 +2166,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.btn_start_process.setObjectName("startButton")
         self.btn_start_process.clicked.connect(self.start_processing)
         
-        # Tạo spinner
+        # Create spinner
         self.processing_spinner = SimpleSpinner()
         
         start_button_layout.addWidget(self.btn_start_process)
@@ -2131,7 +2183,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         settings_widget = QWidget()
         settings_layout = QVBoxLayout(settings_widget)
         
-        # 🔥 BANNER SETTINGS - UNCHANGED
+        # BANNER SETTINGS - UNCHANGED
         banner_group = QGroupBox("🖼️ Video Banner Settings")
         banner_group.setObjectName("modernGroupBox")
         banner_layout = QGridLayout(banner_group)
@@ -2236,7 +2288,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         banner_layout.addWidget(chroma_frame, 5, 0, 1, 3)
         settings_layout.addWidget(banner_group)
         
-        # 🔥 SUBTITLE SETTINGS - REMOVED POSITION X, ALWAYS CENTERED
+        # SUBTITLE SETTINGS - REMOVED POSITION X, ALWAYS CENTERED
         subtitle_group = QGroupBox("📝 Subtitle Settings (Auto-Centered)")
         subtitle_group.setObjectName("modernGroupBox")
         subtitle_layout = QGridLayout(subtitle_group)
@@ -2250,7 +2302,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.subtitle_size.setSuffix("px")
         subtitle_layout.addWidget(self.subtitle_size, 0, 1)
         
-        # 🔥 REMOVED: Position X - Always centered horizontally
         # INFO LABEL ABOUT CENTERING
         center_info = QLabel("📍 Horizontal Position: Auto-centered")
         center_info.setObjectName("infoLabel")
@@ -2275,41 +2326,98 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         
         settings_layout.addWidget(subtitle_group)
         
-        # SOURCE SETTINGS - UNCHANGED
+        # SOURCE SETTINGS - UPDATED WITH TWO MODES
         source_group = QGroupBox("📎 Source Text Settings")
         source_group.setObjectName("modernGroupBox")
-        source_layout = QGridLayout(source_group)
+        source_layout = QVBoxLayout(source_group)
         
-        source_layout.addWidget(QLabel("Source Text:"), 0, 0)
+        # Source mode selection
+        mode_frame = QFrame()
+        mode_frame.setObjectName("settingsFrame")
+        mode_layout = QVBoxLayout(mode_frame)
+        
+        mode_layout.addWidget(QLabel("Source Text Mode:"))
+        
+        # Radio buttons for mode selection
+        self.source_mode_filename = QRadioButton("Extract from filename (xxx_source_SourceName.mp4)")
+        self.source_mode_custom = QRadioButton("Custom text (same for all videos)")
+        self.source_mode_custom.setChecked(True)  # Default to custom mode
+        
+        self.source_mode_filename.setObjectName("modernRadio")
+        self.source_mode_custom.setObjectName("modernRadio")
+        
+        mode_layout.addWidget(self.source_mode_filename)
+        mode_layout.addWidget(self.source_mode_custom)
+        
+        source_layout.addWidget(mode_frame)
+        
+        # Custom source text input (enabled when custom mode is selected)
+        custom_frame = QFrame()
+        custom_frame.setObjectName("settingsFrame")
+        custom_layout = QGridLayout(custom_frame)
+        
+        custom_layout.addWidget(QLabel("Custom Source Text:"), 0, 0)
         self.source_text = QLineEdit()
         self.source_text.setObjectName("modernInput")
-        self.source_text.setPlaceholderText("e.g., @username, website.com")
+        self.source_text.setPlaceholderText("e.g., @YourChannel, website.com, News Source")
         self.source_text.setText("@YourChannel")
-        source_layout.addWidget(self.source_text, 0, 1)
+        custom_layout.addWidget(self.source_text, 0, 1)
         
-        source_layout.addWidget(QLabel("Position X:"), 1, 0)
+        source_layout.addWidget(custom_frame)
+        
+        # Font info
+        font_info_frame = QFrame()
+        font_info_frame.setObjectName("settingsFrame")
+        font_info_layout = QVBoxLayout(font_info_frame)
+        
+        self.font_status_label = QLabel("Font: Plus Jakarta Sans")
+        self.font_status_label.setObjectName("infoLabel")
+        font_info_layout.addWidget(self.font_status_label)
+        
+        source_layout.addWidget(font_info_frame)
+        
+        # Position and styling settings
+        position_frame = QFrame()
+        position_frame.setObjectName("settingsFrame")
+        position_layout = QGridLayout(position_frame)
+        
+        position_layout.addWidget(QLabel("Position X:"), 0, 0)
         self.source_x = QSpinBox()
         self.source_x.setObjectName("modernSpin")
         self.source_x.setRange(0, 1080)
-        self.source_x.setValue(0)
+        self.source_x.setValue(50)
+        self.source_x.setSingleStep(10)
         self.source_x.setSuffix(" px")
-        source_layout.addWidget(self.source_x, 1, 1)
+        position_layout.addWidget(self.source_x, 0, 1)
         
-        source_layout.addWidget(QLabel("Position Y:"), 2, 0)
+        position_layout.addWidget(QLabel("Position Y:"), 1, 0)
         self.source_y = QSpinBox()
         self.source_y.setObjectName("modernSpin")
         self.source_y.setRange(0, 1920)
-        self.source_y.setValue(0)
+        self.source_y.setValue(50)
+        self.source_y.setSingleStep(10)
         self.source_y.setSuffix(" px")
-        source_layout.addWidget(self.source_y, 2, 1)
+        position_layout.addWidget(self.source_y, 1, 1)
         
-        source_layout.addWidget(QLabel("Font Size:"), 3, 0)
+        position_layout.addWidget(QLabel("Font Size:"), 2, 0)
         self.source_font_size = QSpinBox()
         self.source_font_size.setObjectName("modernSpin")
-        self.source_font_size.setRange(10, 24)
+        self.source_font_size.setRange(10, 200)
         self.source_font_size.setValue(14)
         self.source_font_size.setSuffix("px")
-        source_layout.addWidget(self.source_font_size, 3, 1)
+        position_layout.addWidget(self.source_font_size, 2, 1)
+        
+        position_layout.addWidget(QLabel("Font Color:"), 3, 0)
+        self.source_font_color = QComboBox()
+        self.source_font_color.setObjectName("modernCombo")
+        self.source_font_color.addItems(["white", "black", "yellow", "red", "blue"])
+        position_layout.addWidget(self.source_font_color, 3, 1)
+        
+        source_layout.addWidget(position_frame)
+        
+        # Connect radio buttons to enable/disable custom text input
+        self.source_mode_filename.toggled.connect(self.on_source_mode_changed)
+        self.source_mode_custom.toggled.connect(self.on_source_mode_changed)
         
         settings_layout.addWidget(source_group)
         
@@ -2319,8 +2427,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         
         layout.addWidget(settings_scroll)
         return widget
-    # ==============================================================================
-    # THÊM HÀM set_processing_state() VÀ start_processing() CẬP NHẬT
+
     # ==============================================================================
     def set_processing_state(self, is_processing):
         """Cập nhật trạng thái processing với spinner"""
@@ -2679,8 +2786,163 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 self.add_log("INFO", f"🔍 [DEBUG] Using original files count: {len(banner_output_files)}")
 
             # ==================================================================
-            # 🔥 STEP 2: SUBTITLE PROCESSING (nếu được bật) - CRITICAL SECTION
+            # 🔥 STEP 2: SOURCE TEXT PROCESSING (NEW ADDITION)
             # ==================================================================
+            source_output_files = []
+
+            if add_source_checked and SOURCE_TEXT_AVAILABLE:
+                self.add_log("INFO", "🔄 [DEBUG] *** ENTERING SOURCE TEXT PROCESSING BRANCH (WITH UNIVERSAL MAPPING) ***")
+                self.add_log("INFO", "📎 Source Text Processing Started with Universal Mapping")
+                
+                # Determine source mode
+                if hasattr(self, 'source_mode_filename') and self.source_mode_filename.isChecked():
+                    source_mode = "filename"
+                    custom_text = ""
+                    self.add_log("INFO", "📂 Using filename extraction mode (from ORIGINAL filenames)")
+                else:
+                    source_mode = "custom"
+                    custom_text = self.source_text.text().strip() if hasattr(self, 'source_text') else "@YourChannel"
+                    if not custom_text:
+                        self.add_log("WARNING", "⚠️ Custom source text is empty, skipping source text processing")
+                        source_output_files = banner_output_files.copy()
+                    else:
+                        self.add_log("INFO", f"✏️ Using custom text: '{custom_text}'")
+                
+                if source_mode == "filename" or (source_mode == "custom" and custom_text):
+                    # 🔥 Use banner output files as input
+                    input_files_for_source = banner_output_files
+                    original_filenames_for_extraction = files_to_process  # Original filenames for extraction
+                    
+                    self.add_log("INFO", f"🔄 Processing {len(input_files_for_source)} files for source text with UNIVERSAL MAPPING...")
+                    
+                    # 🔥 DEBUG: Log file mappings
+                    self.add_log("INFO", f"🔍 [SOURCE DEBUG] Processing {len(input_files_for_source)} files:")
+                    for i, (processed_file, original_file) in enumerate(zip(input_files_for_source, original_filenames_for_extraction)):
+                        processed_name = os.path.basename(processed_file)
+                        original_name = os.path.basename(original_file)
+                        self.add_log("INFO", f"   {i+1}. Input: {processed_name}")
+                        self.add_log("INFO", f"      Original: {original_name}")
+                    
+                    # 🔥 PROCESS EACH FILE WITH UNIVERSAL MAPPING
+                    successful_source_files = []
+                    
+                    for idx, video_file in enumerate(input_files_for_source, 1):
+                        try:
+                            base_name = os.path.basename(video_file)
+                            name_without_ext = os.path.splitext(base_name)[0]
+                            file_ext = os.path.splitext(base_name)[1]
+                            
+                            self.add_log("INFO", f"📎 Processing {idx}/{len(input_files_for_source)}: {base_name}")
+                            
+                            # Update UI
+                            if hasattr(self, 'current_file_label'):
+                                self.current_file_label.setText(f"Adding source text: {base_name}")
+                            if hasattr(self, 'current_progress'):
+                                progress = int((idx-1) / len(input_files_for_source) * 100)
+                                self.current_progress.setValue(progress)
+                            QApplication.processEvents()
+                            
+                            # 🔥 GET VIDEO DIMENSIONS FOR MAPPING
+                            video_width, video_height = self.get_video_dimensions(video_file)
+                            if not video_width or not video_height:
+                                self.add_log("ERROR", f"❌ Cannot get dimensions for: {base_name}")
+                                continue
+                            
+                            # 🔥 CALCULATE UNIVERSAL MAPPING
+                            source_params = self.calculate_universal_source_params(video_width, video_height)
+                            if not source_params:
+                                self.add_log("ERROR", f"❌ Universal mapping calculation failed for: {base_name}")
+                                continue
+                            
+                            # 🔥 DETERMINE SOURCE TEXT BASED ON MODE
+                            if source_mode == "filename":
+                                # Use original filename for extraction
+                                if original_filenames_for_extraction and idx <= len(original_filenames_for_extraction):
+                                    original_filename = os.path.basename(original_filenames_for_extraction[idx - 1])
+                                    source_text = extract_source_from_filename(original_filename)
+                                    self.add_log("INFO", f"🔍 Extracting from original: {original_filename}")
+                                    
+                                    if not source_text:
+                                        self.add_log("WARNING", f"⚠️ No source text found in original filename: {original_filename}")
+                                        continue
+                                    self.add_log("SUCCESS", f"✅ Extracted source text: '{source_text}'")
+                                else:
+                                    self.add_log("ERROR", f"❌ No original filename available for index {idx}")
+                                    continue
+                            else:  # custom mode
+                                source_text = custom_text
+                                self.add_log("INFO", f"📝 Using custom text: '{source_text}'")
+                            
+                            # 🔥 CREATE OUTPUT PATH
+                            output_path = os.path.join(output_dir, f"{name_without_ext}_with_source{file_ext}")
+                            
+                            # 🔥 CALL SOURCE TEXT FUNCTION WITH UNIVERSAL MAPPING
+                            success, message = add_source_text_to_video(
+                                input_video_path=video_file,
+                                output_video_path=output_path,
+                                source_text=source_text,
+                                position_x=source_params["position_x"],    # ⬅️ MAPPED position
+                                position_y=source_params["position_y"],    # ⬅️ MAPPED position
+                                font_size=source_params["font_size"],      # ⬅️ MAPPED font size
+                                font_color=source_params["font_color"],    # ⬅️ GUI color
+                                ffmpeg_executable=None
+                            )
+                            
+                            if success:
+                                successful_source_files.append(output_path)
+                                self.add_log("SUCCESS", f"✅ Source text added with universal mapping: {base_name}")
+                                self.add_log("INFO", f"   📁 Output: {os.path.basename(output_path)}")
+                            else:
+                                self.add_log("ERROR", f"❌ Failed to add source text to {base_name}: {message}")
+                                
+                        except Exception as e:
+                            self.add_log("ERROR", f"❌ Error processing {base_name}: {str(e)}")
+                            import traceback
+                            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
+                            continue
+                    
+                    # Update source_output_files with successful results
+                    source_output_files = successful_source_files
+                    
+                    # Update queue status
+                    for idx in range(len(input_files_for_source)):
+                        if idx < self.queue_list.count():
+                            queue_item = self.queue_list.item(idx)
+                            current_text = queue_item.text()
+                            if idx < len(successful_source_files):
+                                # Success - add source icon
+                                if "✅" in current_text:
+                                    queue_item.setText(current_text.replace("✅", "✅📎"))
+                                else:
+                                    queue_item.setText(f"✅📎 {os.path.basename(input_files_for_source[idx])}")
+                            else:
+                                # Failed - add failed source icon
+                                if "❌" not in current_text:
+                                    queue_item.setText(f"❌📎 {os.path.basename(input_files_for_source[idx])}")
+                    
+                    self.add_log("SUCCESS", f"🎉 Source Text Processing Complete with UNIVERSAL MAPPING!")
+                    self.add_log("SUCCESS", f"   ✅ Successful: {len(successful_source_files)}/{len(input_files_for_source)} files")
+                    self.add_log("INFO", f"💡 Mapping mode: {'Original filename extraction' if source_mode == 'filename' else 'Custom text overlay'}")
+                    
+                    if len(successful_source_files) < len(input_files_for_source):
+                        failed_count = len(input_files_for_source) - len(successful_source_files)
+                        self.add_log("WARNING", f"   ⚠️ Failed: {failed_count} files (check logs for details)")
+                else:
+                    # No source text processing, use banner output
+                    source_output_files = banner_output_files.copy()
+
+            elif add_source_checked and not SOURCE_TEXT_AVAILABLE:
+                self.add_log("ERROR", "❌ Source text processing requested but module not available")
+                source_output_files = banner_output_files.copy()
+            else:
+                self.add_log("INFO", "🔄 [DEBUG] *** SOURCE TEXT PROCESSING SKIPPED - CHECKBOX NOT CHECKED ***")
+                source_output_files = banner_output_files.copy()
+
+            # ==================================================================
+            # 🔥 STEP 3: SUBTITLE PROCESSING (nếu được bật) - CRITICAL SECTION
+            # ==================================================================
+            subtitle_output_files = []
+
             self.add_log("INFO", f"🔍 [DEBUG] Checking subtitle condition: add_subtitle_checked = {add_subtitle_checked}")
             
             if add_subtitle_checked:
@@ -2692,7 +2954,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 api_key = self.get_validated_api_key()
                 if not api_key:
                     self.add_log("ERROR", "❌ [DEBUG] API key validation failed - STOPPING SUBTITLE PROCESSING")
-                    # Don't return, continue with other processing
+                    subtitle_output_files = source_output_files.copy()
                     self.add_log("WARNING", "⚠️ Subtitle processing skipped due to API key issue")
                 else:
                     self.add_log("SUCCESS", f"✅ [DEBUG] API key validated successfully: {len(api_key)} chars")
@@ -2706,18 +2968,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         self.add_log("ERROR", f"❌ [DEBUG] Subtitle module import failed: {str(import_error)}")
                         self.add_log("WARNING", "⚠️ Subtitle processing skipped due to import issue")
                         api_key = None  # Disable subtitle processing
+                        subtitle_output_files = source_output_files.copy()
                     
                     if api_key:  # Only proceed if API key is valid and import successful
                         subtitle_successful_files = 0
-                        final_output_files = []  # Track các file cuối cùng
                         
-                        # Sử dụng files từ banner processing (hoặc gốc nếu không có banner)
-                        if add_banner_checked:
-                            self.add_log("INFO", "🔗 [DEBUG] Processing subtitles on banner-processed videos")
-                            input_files_for_subtitle = banner_output_files
-                        else:
-                            self.add_log("INFO", "📹 [DEBUG] Processing subtitles on original videos")
-                            input_files_for_subtitle = files_to_process.copy()
+                        # Use source output files as input for subtitle processing
+                        input_files_for_subtitle = source_output_files
                         
                         self.add_log("INFO", f"🔍 [DEBUG] Files to process for subtitle: {len(input_files_for_subtitle)}")
                         
@@ -2740,7 +2997,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 self.current_progress.setValue(progress)
                             QApplication.processEvents()
                             
-                            # 🔥 CRITICAL: Gọi hàm xử lý subtitle - THỜI ĐIỂM QUAN TRỌNG
+                            # 🔥 CRITICAL: Gọi hàm xử lý subtitle
                             self.add_log("INFO", f"🤖 [DEBUG] *** CALLING process_subtitles_for_video() for {base_name} ***")
                             
                             try:
@@ -2766,14 +3023,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 current_text = queue_item.text()
                                 if success:
                                     subtitle_successful_files += 1
-                                    final_output_files.append(subtitle_output)
+                                    subtitle_output_files.append(subtitle_output)
                                     # Thêm icon subtitle vào status
                                     if "✅" in current_text:
                                         queue_item.setText(current_text.replace("✅", "✅📝"))
                                     else:
                                         queue_item.setText(f"✅📝 {base_name}")
                                 else:
-                                    final_output_files.append(video_file)  # Fallback
+                                    subtitle_output_files.append(video_file)  # Fallback
                                     if "❌" not in current_text:
                                         queue_item.setText(f"❌📝 {base_name}")
                         
@@ -2785,6 +3042,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                             self.add_log("WARNING", f"   ⚠️ Failed: {failed_count} files (check logs for details)")
             else:
                 self.add_log("INFO", "🔄 [DEBUG] *** SUBTITLE PROCESSING SKIPPED - CHECKBOX NOT CHECKED ***")
+                subtitle_output_files = source_output_files.copy()
 
             # ==================================================================
             # 🔥 COMPLETION
@@ -2801,12 +3059,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             
             # Thống kê tổng quát
             total_processed = len(files_to_process)
-            if add_banner_checked and add_subtitle_checked:
-                self.add_log("INFO", f"   🎬 Pipeline: Video → Banner → Subtitle → Final Output")
-            elif add_banner_checked:
-                self.add_log("INFO", f"   🎬 Pipeline: Video → Banner → Final Output")
-            elif add_subtitle_checked:
-                self.add_log("INFO", f"   🎬 Pipeline: Video → Subtitle → Final Output")
+            pipeline_steps = []
+            if add_banner_checked:
+                pipeline_steps.append("Banner")
+            if add_source_checked:
+                pipeline_steps.append("Source Text")
+            if add_subtitle_checked:
+                pipeline_steps.append("Subtitle")
+            
+            if pipeline_steps:
+                self.add_log("INFO", f"   🎬 Pipeline: Video → {' → '.join(pipeline_steps)} → Final Output")
             
             self.add_log("INFO", f"   📊 Total files processed: {total_processed}")
 
@@ -3160,8 +3422,108 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         """Help and documentation"""
         self.add_log("INFO", "🎥 Opening video tutorial...")
 
+    #Hàm liên quan đến add source text
+    def on_source_mode_changed(self):
+        """Handle source mode radio button changes"""
+        is_custom_mode = self.source_mode_custom.isChecked()
+        self.source_text.setEnabled(is_custom_mode)
+        
+        if is_custom_mode:
+            self.source_text.setStyleSheet("")  # Normal style
+            self.add_log("INFO", "Source mode: Custom text")
+        else:
+            self.source_text.setStyleSheet("color: #888888;")  # Grayed out
+            self.add_log("INFO", "Source mode: Extract from filename")
 
+    def check_source_text_setup(self):
+        """Check if source text processing is properly set up"""
+        if not SOURCE_TEXT_AVAILABLE:
+            self.add_log("ERROR", "Source text module not available")
+            if hasattr(self, 'font_status_label'):
+                self.font_status_label.setText("Font: Module not found")
+                self.font_status_label.setStyleSheet("color: #fc8181;")
+            return False
+        
+        font_path = get_plus_jakarta_font_path()
+        font_available = validate_font_file(font_path)
+        
+        if font_available:
+            self.add_log("SUCCESS", f"Plus Jakarta Sans font found: {font_path}")
+            if hasattr(self, 'font_status_label'):
+                self.font_status_label.setText("Font: Plus Jakarta Sans (Available)")
+                self.font_status_label.setStyleSheet("color: #15803d;")
+        else:
+            self.add_log("WARNING", f"Plus Jakarta Sans font not found: {font_path}")
+            self.add_log("INFO", "Will use system default font")
+            if hasattr(self, 'font_status_label'):
+                self.font_status_label.setText("Font: System default (Plus Jakarta Sans not found)")
+                self.font_status_label.setStyleSheet("color: #d97706;")
+        
+        return True
 
+    def calculate_universal_source_params(self, video_width: int, video_height: int) -> dict:
+        """ NEW: Tính toán source text params với universal mapping"""
+        try:
+            # Reference size (1080x1920)
+            REFERENCE_WIDTH = 1080
+            REFERENCE_HEIGHT = 1920
+            
+            # Input validation
+            if video_width <= 0 or video_height <= 0:
+                self.add_log("ERROR", f"❌ Invalid video dimensions: {video_width}x{video_height}")
+                return None
+            
+            # 🔥 Lấy GUI values với safety checks
+            gui_x = self.source_x.value() if hasattr(self, 'source_x') and self.source_x is not None else 50
+            gui_y = self.source_y.value() if hasattr(self, 'source_y') and self.source_y is not None else 50
+            gui_font_size = self.source_font_size.value() if hasattr(self, 'source_font_size') and self.source_font_size is not None else 14
+            gui_font_color = self.source_font_color.currentText() if hasattr(self, 'source_font_color') and self.source_font_color is not None else "white"
+            
+            # 🔥 SCALING CALCULATIONS
+            width_scale = video_width / REFERENCE_WIDTH
+            height_scale = video_height / REFERENCE_HEIGHT
+            
+            # Scale position
+            actual_x = int(gui_x * width_scale)
+            actual_y = int(gui_y * height_scale)
+            
+            # Scale font size (use minimum scale to maintain readability)
+            font_scale = min(width_scale, height_scale)
+            actual_font_size = max(8, int(gui_font_size * font_scale))  # Minimum 8px
+            
+            # Boundary checks - ensure text doesn't go off screen
+            text_width_estimate = len("Source: Example Text") * actual_font_size * 0.6  # Rough estimation
+            max_x = max(0, video_width - int(text_width_estimate))
+            max_y = max(actual_font_size, video_height - actual_font_size)  # Keep within bounds
+            
+            final_x = max(0, min(actual_x, max_x))
+            final_y = max(actual_font_size, min(actual_y, max_y))
+            
+            # 🔥 Build parameters
+            params = {
+                "position_x": final_x,
+                "position_y": final_y,
+                "font_size": actual_font_size,
+                "font_color": gui_font_color,
+                "video_width": video_width,
+                "video_height": video_height
+            }
+            
+            # Detailed logging
+            self.add_log("SUCCESS", f"📎 Source text universal mapping calculated:")
+            self.add_log("INFO", f"   📐 Video: {video_width}x{video_height}")
+            self.add_log("INFO", f"   📏 Scale factors: {width_scale:.3f}x (W), {height_scale:.3f}x (H)")
+            self.add_log("INFO", f"   📍 Position: ({gui_x}, {gui_y}) → ({final_x}, {final_y})")
+            self.add_log("INFO", f"   🔤 Font: {gui_font_size}px → {actual_font_size}px (scale: {font_scale:.3f})")
+            self.add_log("INFO", f"   🎨 Color: {gui_font_color}")
+            
+            return params
+            
+        except Exception as e:
+            self.add_log("ERROR", f"❌ Source text calculation error: {str(e)}")
+            import traceback
+            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
+            return None
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     

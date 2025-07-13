@@ -639,3 +639,47 @@ QFrame[frameShape="5"] {
     border: none;
     max-width: 1px;
 }
+
+
+/* Radio Button Styles */
+QRadioButton#modernRadio {
+    color: #1f2937;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 6px 8px;
+    spacing: 8px;
+    margin: 2px 0;
+    background: transparent;
+    border-radius: 4px;
+}
+
+QRadioButton#modernRadio:hover {
+    background: rgba(56, 189, 248, 0.1);
+    color: #0c4a6e;
+}
+
+QRadioButton#modernRadio::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 2px solid #9ca3af;
+    background: #ffffff;
+    margin-right: 4px;
+}
+
+QRadioButton#modernRadio::indicator:hover {
+    border-color: #6b7280;
+    background: #f9fafb;
+}
+
+QRadioButton#modernRadio::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #38bdf8, stop:1 #0ea5e9);
+    border: 2px solid #0ea5e9;
+}
+
+QRadioButton#modernRadio::indicator:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #7dd3fc, stop:1 #38bdf8);
+    border: 2px solid #38bdf8;
+}
