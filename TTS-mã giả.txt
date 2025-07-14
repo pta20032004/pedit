@@ -16,5 +16,8 @@ def chunk_partition(file.srt):
 	output: đã phân chia được các chunk trong một video	
 
 
-def
+# Chèn voice AI vào video
+def get_voice_AI(chunks):
+	for chunk in chunks:
+		
 			

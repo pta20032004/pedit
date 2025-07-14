@@ -292,29 +292,45 @@ def create_subtitle_generation_prompt(source_lang: str, target_lang: str) -> str
     else:
         task = f"translate the {source_clean} audio into {target_clean}"
     
-    prompt = f"""Please {task} and provide the result in standard SRT subtitle format.
+    prompt = f"""Please {task} and create optimized SRT subtitles for 9:16 mobile video format.
 
-CRITICAL RULES:
-1. Return ONLY SRT content - no explanations, no markdown
-2. Time format: HH:MM:SS,mmm --> HH:MM:SS,mmm  
-3. Start from 00:00:00,000 and follow actual audio timing
-4. Sequential numbering (1, 2, 3, 4...)
-5. Keep each subtitle SHORT - maximum 6-10 words per subtitle
-6. Break long sentences into multiple short subtitles for easy reading
-7. Output ONLY the {target_clean} text - do not include original language
-8. If translation is needed, provide accurate and natural translation
+🎬 VIDEO CONTEXT:
+- Format: 9:16 vertical (mobile/TikTok style)
+- Optimized for phone screens and quick viewing
+- Audience expects clear, easy-to-read subtitles
 
-Format example:
+📝 FORMAT REQUIREMENTS:
+1. Return ONLY pure SRT content - no markdown, no explanations
+2. Time format: HH:MM:SS,mmm --> HH:MM:SS,mmm (exact precision)
+3. Start from 00:00:00,000 following actual audio timing
+4. Sequential numbering: 1, 2, 3, 4...
+
+⚡ CONTENT RULES:
+5. Each subtitle: 4-8 words (mobile-optimized length)
+6. Duration: 2-4 seconds per subtitle
+7. Break long sentences into short, readable chunks
+8. Output ONLY {target_clean} text, no original language
+9. Natural translation, easy to understand
+
+📱 MOBILE OPTIMIZATION:
+- Font will be small on mobile → keep text short
+- Users read quickly → use simple words
+- Avoid complex sentences, use common vocabulary
+
+Standard example:
 1
-00:00:00,000 --> 00:00:03,500
-First short subtitle here
+00:00:00,000 --> 00:00:03,200
+Hello everyone
 
 2
-00:00:03,500 --> 00:00:07,200
-Second short subtitle here
+00:00:03,200 --> 00:00:06,500
+Today I will share
 
-IMPORTANT: Each subtitle block has only ONE line of text in {target_clean}.
-Begin with subtitle number 1:"""
+3
+00:00:06,500 --> 00:00:09,800
+How to make viral videos
+
+START WITH SUBTITLE NUMBER 1:"""
     
     return prompt
 
@@ -975,6 +991,3 @@ def get_default_words_per_line(target_language: str) -> int:
             clean_lang = clean_lang.split("(")[0].strip()
     
     return defaults.get(clean_lang, 8)
-
-
-

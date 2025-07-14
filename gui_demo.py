@@ -77,7 +77,7 @@ try:
     print("✅ Source text module loaded successfully")
 except ImportError as e:
     SOURCE_TEXT_AVAILABLE = False
-    print(f"⚠️ Warning: Source text module not found: {str(e)}")
+    print("f⚠️ Warning: Source text module not found: {str(e)}")
 try:
     from gg_api.get_subtitle import fix_srt_timestamps
     SUBTITLE_FIX_AVAILABLE = True
@@ -156,6 +156,254 @@ class SimpleSpinner(QLabel):
         self.setText(self.spinner_chars[self.current_index])
         self.current_index = (self.current_index + 1) % len(self.spinner_chars)
 
+class ProcessingWorker(QThread):
+    """Worker thread để xử lý video trong background"""
+    
+    # Signals để communicate với main thread
+    progress_updated = pyqtSignal(int)  # Overall progress (0-100)
+    current_file_updated = pyqtSignal(str)  # Current file name
+    current_step_updated = pyqtSignal(str)  # Current step
+    log_message = pyqtSignal(str, str)  # (level, message)
+    queue_updated = pyqtSignal(int, str)  # (index, status)
+    processing_finished = pyqtSignal(bool)  # (success)
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.files_to_process = []
+        self.output_dir = ""
+        self.settings = {}
+        self.should_stop = False
+        
+    def setup_processing(self, files_to_process, output_dir, settings):
+        """Setup processing parameters"""
+        self.files_to_process = files_to_process
+        self.output_dir = output_dir
+        self.settings = settings
+        self.should_stop = False
+        
+    def stop_processing(self):
+        """Stop processing gracefully"""
+        self.should_stop = True
+        
+    def run(self):
+        """Main processing loop - runs in background thread"""
+        try:
+            self.log_message.emit("INFO", "🚀 Background processing started...")
+            
+            total_files = len(self.files_to_process)
+            successful_files = 0
+            
+            for i, video_path in enumerate(self.files_to_process):
+                if self.should_stop:
+                    self.log_message.emit("WARNING", "⚠️ Processing cancelled by user")
+                    break
+                
+                # Update current file
+                file_name = os.path.basename(video_path)
+                self.current_file_updated.emit(f"Processing: {file_name}")
+                self.queue_updated.emit(i, "🔄 Processing...")
+                
+                # Process single file
+                success = self.process_single_file(video_path, i + 1, total_files)
+                
+                if success:
+                    successful_files += 1
+                    self.queue_updated.emit(i, "✅ Completed")
+                    self.log_message.emit("SUCCESS", f"✅ Completed: {file_name}")
+                else:
+                    self.queue_updated.emit(i, "❌ Failed")
+                    self.log_message.emit("ERROR", f"❌ Failed: {file_name}")
+                
+                # Update overall progress
+                overall_progress = int((i + 1) / total_files * 100)
+                self.progress_updated.emit(overall_progress)
+                
+                # Small delay để UI có thể update
+                self.msleep(100)
+            
+            # Final results
+            self.current_file_updated.emit("Processing completed")
+            self.current_step_updated.emit(f"Finished: {successful_files}/{total_files} successful")
+            
+            success_rate = successful_files == total_files
+            self.processing_finished.emit(success_rate)
+            
+            if success_rate:
+                self.log_message.emit("SUCCESS", f"🎉 All {total_files} files processed successfully!")
+            else:
+                self.log_message.emit("WARNING", f"⚠️ Processing completed: {successful_files}/{total_files} successful")
+                
+        except Exception as e:
+            self.log_message.emit("ERROR", f"❌ Worker thread error: {str(e)}")
+            self.processing_finished.emit(False)
+    
+    def process_single_file(self, video_path, current_index, total_files):
+        """Process a single video file"""
+        try:
+            base_name = os.path.basename(video_path)
+            name_without_ext = os.path.splitext(base_name)[0]
+            file_ext = os.path.splitext(base_name)[1]
+            
+            self.log_message.emit("INFO", f"📹 [{current_index}/{total_files}] Processing: {base_name}")
+            
+            # 🔥 FINAL OUTPUT PATH (chỉ một file cuối)
+            final_output = os.path.join(self.output_dir, f"{name_without_ext}_with_source{file_ext}")
+            
+            # 🔥 DANH SÁCH CÁC FILE TRUNG GIAN CẦN XÓA
+            temp_files_to_delete = []
+            
+            # Working video path (sẽ được cập nhật qua các bước)
+            current_video = video_path
+            
+            # STEP 1: Add subtitles
+            if self.settings.get('add_subtitle', False):
+                self.current_step_updated.emit("Step 1/4: Adding subtitles...")
+                
+                success, subtitle_video = self.parent.process_subtitles_for_video(
+                    current_video, self.output_dir
+                )
+                
+                if success and subtitle_video:
+                    current_video = subtitle_video
+                    temp_files_to_delete.append(subtitle_video)  # 🔥 ĐÁNH DẤU XÓA
+                    self.log_message.emit("SUCCESS", "✅ Subtitles added successfully")
+                    
+                    # 🔥 CHUYỂN FILE SRT VÀO FOLDER SUBTITLE
+                    self.move_srt_to_subtitle_folder(subtitle_video)
+                else:
+                    self.log_message.emit("ERROR", "❌ Subtitle processing failed")
+                    return False
+            
+            # STEP 2: Add banner
+            if self.settings.get('add_banner', False):
+                self.current_step_updated.emit("Step 2/4: Adding banner...")
+                
+                banner_output = os.path.join(self.output_dir, f"{name_without_ext}_with_banner{file_ext}")
+                
+                success = self.parent.process_banner_with_universal_mapping(
+                    current_video, 
+                    self.settings.get('banner_path', ''),
+                    banner_output
+                )
+                
+                if success:
+                    current_video = banner_output
+                    temp_files_to_delete.append(banner_output)  # 🔥 ĐÁNH DẤU XÓA
+                    self.log_message.emit("SUCCESS", "✅ Banner added successfully")
+                else:
+                    self.log_message.emit("ERROR", "❌ Banner processing failed")
+                    return False
+            
+            # STEP 3: Add source text (FILE CUỐI CÙNG)
+            if self.settings.get('add_source', False) and SOURCE_TEXT_AVAILABLE:
+                self.current_step_updated.emit("Step 3/4: Adding source text...")
+                
+                # Get video dimensions for universal mapping
+                video_width, video_height = self.parent.get_video_dimensions(current_video)
+                
+                if video_width and video_height:
+                    source_params = self.parent.calculate_universal_source_params(video_width, video_height)
+                    
+                    if source_params:
+                        # Determine source text
+                        if self.settings.get('source_mode_filename', False):
+                            from source_text import extract_source_from_filename
+                            source_text = extract_source_from_filename(base_name)
+                        else:
+                            source_text = self.settings.get('source_text', '@YourChannel')
+                        
+                        # 🔥 Add source text - TRỰC TIẾP VÀO FILE CUỐI
+                        from source_text import add_source_text_to_video
+                        success, message = add_source_text_to_video(
+                            input_video_path=current_video,
+                            output_video_path=final_output,  # 🔥 TRỰC TIẾP VÀO FILE CUỐI
+                            source_text=source_text,
+                            position_x=source_params['position_x'],
+                            position_y=source_params['position_y'],
+                            font_size=source_params['font_size'],
+                            font_color=source_params['font_color']
+                        )
+                        
+                        if success:
+                            self.log_message.emit("SUCCESS", f"✅ Source text added: {source_text}")
+                        else:
+                            self.log_message.emit("ERROR", f"❌ Source text processing failed: {message}")
+                            return False
+                    else:
+                        self.log_message.emit("ERROR", "❌ Cannot calculate source parameters")
+                        return False
+                else:
+                    self.log_message.emit("ERROR", "❌ Cannot get video dimensions for source text")
+                    return False
+            else:
+                # 🔥 NẾU KHÔNG CÓ SOURCE TEXT, COPY VIDEO HIỆN TẠI VÀO FILE CUỐI
+                import shutil
+                shutil.copy2(current_video, final_output)
+                self.log_message.emit("INFO", "ℹ️ No source text, copied current video as final")
+            
+            # STEP 4: 🔥 DỌN DẸP CÁC FILE TRUNG GIAN
+            self.current_step_updated.emit("Step 4/4: Cleaning up...")
+            
+            deleted_count = 0
+            for temp_file in temp_files_to_delete:
+                try:
+                    if os.path.exists(temp_file) and temp_file != final_output:
+                        os.remove(temp_file)
+                        deleted_count += 1
+                        self.log_message.emit("INFO", f"🗑️ Deleted temp file: {os.path.basename(temp_file)}")
+                except Exception as e:
+                    self.log_message.emit("WARNING", f"⚠️ Could not delete {os.path.basename(temp_file)}: {str(e)}")
+            
+            self.log_message.emit("SUCCESS", f"✅ Final output: {os.path.basename(final_output)}")
+            self.log_message.emit("INFO", f"🧹 Cleaned up {deleted_count} temporary files")
+            
+            return True
+            
+        except Exception as e:
+            self.log_message.emit("ERROR", f"❌ Error processing {base_name}: {str(e)}")
+            import traceback
+            self.log_message.emit("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
+            return False
+
+    def move_srt_to_subtitle_folder(self, video_path):
+        """🔥 NEW: Chuyển file SRT vào folder subtitle"""
+        try:
+            # Tìm file SRT tương ứng
+            video_dir = os.path.dirname(video_path)
+            video_base = os.path.splitext(os.path.basename(video_path))[0]
+            
+            # File SRT có thể có tên khác nhau
+            possible_srt_names = [
+                f"{video_base}.srt",
+                f"{video_base}_subtitle.srt",
+                video_base.replace("_with_subtitles", "_subtitle") + ".srt"
+            ]
+            
+            # Tạo folder subtitle
+            subtitle_folder = os.path.join(self.output_dir, "subtitle")
+            if not os.path.exists(subtitle_folder):
+                os.makedirs(subtitle_folder)
+                self.log_message.emit("INFO", f"📁 Created subtitle folder: {subtitle_folder}")
+            
+            # Tìm và chuyển file SRT
+            for srt_name in possible_srt_names:
+                srt_path = os.path.join(video_dir, srt_name)
+                if os.path.exists(srt_path):
+                    new_srt_path = os.path.join(subtitle_folder, srt_name)
+                    
+                    import shutil
+                    shutil.move(srt_path, new_srt_path)
+                    
+                    self.log_message.emit("SUCCESS", f"📄 Moved SRT to: subtitle/{srt_name}")
+                    return True
+            
+            self.log_message.emit("WARNING", "⚠️ SRT file not found for moving")
+            return False
+            
+        except Exception as e:
+            self.log_message.emit("ERROR", f"❌ Error moving SRT file: {str(e)}")
+            return False
 
 class VideoPreviewWidget(QLabel):
     """Custom widget for displaying 9:16 video preview with overlay areas - FIXED SYNC"""
@@ -369,6 +617,10 @@ class VideoEditorMainWindow(QMainWindow):
         # 🔥 THÊM BIẾN PROCESSING STATE
         self.is_processing = False
         
+        # 🔥 TẠO WORKER THREAD
+        self.processing_worker = ProcessingWorker(self)
+        self.setup_worker_connections()
+        
         self.init_ui()
         self.apply_modern_styles()
         
@@ -379,6 +631,48 @@ class VideoEditorMainWindow(QMainWindow):
         QApplication.processEvents()  # Để UI load xong trước
         self.check_ffmpeg_installation()
     
+    def setup_worker_connections(self):
+        """Kết nối signals từ worker thread tới main thread"""
+        self.processing_worker.progress_updated.connect(self.update_overall_progress)
+        self.processing_worker.current_file_updated.connect(self.update_current_file)
+        self.processing_worker.current_step_updated.connect(self.update_current_step)
+        self.processing_worker.log_message.connect(self.add_log)
+        self.processing_worker.queue_updated.connect(self.update_queue_item)
+        self.processing_worker.processing_finished.connect(self.on_processing_finished)
+
+    def update_overall_progress(self, progress):
+        """Update overall progress bar"""
+        if hasattr(self, 'overall_progress'):
+            self.overall_progress.setValue(progress)
+        if hasattr(self, 'current_progress'):
+            self.current_progress.setValue(progress)
+
+    def update_current_file(self, message):
+        """Update current file label"""
+        if hasattr(self, 'current_file_label'):
+            self.current_file_label.setText(message)
+
+    def update_current_step(self, message):
+        """Update current step label"""
+        if hasattr(self, 'current_step_label'):
+            self.current_step_label.setText(message)
+
+    def update_queue_item(self, index, status):
+        """Update queue item status"""
+        if hasattr(self, 'queue_list') and index < self.queue_list.count():
+            item = self.queue_list.item(index)
+            if item:
+                file_name = item.text().split(" ", 1)[-1] if " " in item.text() else item.text()
+                item.setText(f"{status} {file_name}")
+
+    def on_processing_finished(self, success):
+        """Called when processing is completely finished"""
+        self.set_processing_state(False)
+        
+        if success:
+            self.add_log("SUCCESS", "🎉 All processing completed successfully!")
+        else:
+            self.add_log("WARNING", "⚠️ Processing finished with some errors")
     
     def wrap_text_for_safe_display(self, text: str, max_chars_per_line: int) -> str:
         """🔥 SIMPLE: Wrap text để fit TikTok safe area"""
@@ -1222,15 +1516,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             # 9. SOURCE TEXT DEFAULTS
             if hasattr(self, 'source_x'):
-                self.source_x.setValue(850)
+                self.source_x.setValue(920)
                 self.add_log("INFO", f"📎 Default source X position: 50px")
                 
             if hasattr(self, 'source_y'):
-                self.source_y.setValue(200)
+                self.source_y.setValue(230)
                 self.add_log("INFO", f"📎 Default source Y position: 50px")
                 
             if hasattr(self, 'source_font_size'):
-                self.source_font_size.setValue(30)
+                self.source_font_size.setValue(35)
                 self.add_log("INFO", f"📎 Default source font size: 14px")
                 
             if hasattr(self, 'source_font_color'):
@@ -2787,430 +3081,115 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             return False
         
     def start_processing(self):
-        """Begin batch video processing với UNIVERSAL banner mapping và subtitle generation"""
+        """Begin batch video processing - CHỈ setup và start worker thread"""
         if self.file_list.count() == 0:
             self.add_log("WARNING", "⚠️ No files selected for processing")
             return
 
+        # Kiểm tra nếu đang processing
+        if self.is_processing:
+            self.add_log("WARNING", "⚠️ Processing already in progress")
+            return
+
+        # Kiểm tra output directory
+        output_dir = self.output_path.text().strip()
+        if not output_dir or not os.path.isdir(output_dir):
+            self.add_log("ERROR", "❌ Output directory not found or path is empty.")
+            return
+
+        # Validate API key nếu subtitle được bật
+        if self.chk_add_subtitle.isChecked():
+            api_key = self.get_validated_api_key()
+            if not api_key:
+                self.add_log("ERROR", "❌ API key required for subtitle processing")
+                return
+
+        # Validate banner file nếu banner được bật
+        if self.chk_add_banner.isChecked():
+            banner_path = self.banner_path.text().strip()
+            if not banner_path or not os.path.exists(banner_path):
+                self.add_log("ERROR", "❌ Banner file required for banner processing")
+                return
+
         # Bắt đầu processing state
         self.set_processing_state(True)
-        QApplication.processEvents()
-
+        
         try:
-            self.add_log("INFO", "🚀 Starting UNIVERSAL batch processing...")
-            self.add_log("INFO", f"📊 Processing {self.file_list.count()} files")
-
-            # 🔥 DEBUG: Kiểm tra trạng thái checkbox
-            add_banner_checked = self.chk_add_banner.isChecked()
-            add_subtitle_checked = self.chk_add_subtitle.isChecked()
-            add_source_checked = self.chk_add_source.isChecked()
-            add_voice_checked = self.chk_voice_over.isChecked()
-            
-            self.add_log("INFO", f"🔍 [DEBUG] Checkbox status:")
-            self.add_log("INFO", f"   🖼️ Banner: {add_banner_checked}")
-            self.add_log("INFO", f"   📝 Subtitle: {add_subtitle_checked}")
-            self.add_log("INFO", f"   📎 Source: {add_source_checked}")
-            self.add_log("INFO", f"   🔊 Voice: {add_voice_checked}")
-
-            # Log processing settings
-            source_lang = self.source_lang.currentText()
-            target_lang = self.target_lang.currentText()
-            self.add_log("INFO", f"🌐 Language: {source_lang} → {target_lang}")
-
-            # Log enabled effects
-            effects = []
-            if add_banner_checked:
-                effects.append("Universal Banner Mapping")
-            if add_subtitle_checked:
-                effects.append("AI Subtitles")
-            if add_source_checked:
-                effects.append("Source Text")
-            if add_voice_checked:
-                effects.append("AI Voice Over")
-
-            if effects:
-                self.add_log("INFO", f"🎨 Effects enabled: {', '.join(effects)}")
-            else:
-                self.add_log("WARNING", "🎨 NO EFFECTS ENABLED!")
-
-            # Populate processing queue
-            self.queue_list.clear()
+            # Collect files to process
             files_to_process = []
             for i in range(self.file_list.count()):
                 item_text = self.file_list.item(i).text().split("📹 ")[-1]
                 files_to_process.append(item_text)
-                queue_item = QListWidgetItem(f"⏳ {os.path.basename(item_text)}")
-                self.queue_list.addItem(queue_item)
 
-            output_dir = self.output_path.text().strip()
-            if not output_dir or not os.path.isdir(output_dir):
-                self.add_log("ERROR", "❌ Output directory not found or path is empty.")
-                self.set_processing_state(False)
-                return
+            # Collect ALL settings để pass cho worker
+            settings = {
+                'add_banner': self.chk_add_banner.isChecked(),
+                'add_subtitle': self.chk_add_subtitle.isChecked(),
+                'add_source': self.chk_add_source.isChecked(),
+                'add_voice': self.chk_voice_over.isChecked(),
+                'api_key': self.get_validated_api_key() if self.chk_add_subtitle.isChecked() else '',
+                'source_lang': self.source_lang.currentText(),
+                'target_lang': self.target_lang.currentText(),
+                'banner_path': self.banner_path.text().strip(),
+                'banner_x': self.banner_x.value(),
+                'banner_y': self.banner_y.value(),
+                'banner_height_ratio': self.banner_height_ratio.value(),
+                'banner_start_time': self.banner_start_time.value(),
+                'banner_end_time': self.banner_end_time.value(),
+                'chroma_color': self._get_chroma_color(),
+                'chroma_tolerance': self.chroma_tolerance.value(),
+                'enable_chromakey': self.enable_chromakey.isChecked(),
+                'source_mode_filename': hasattr(self, 'source_mode_filename') and self.source_mode_filename.isChecked(),
+                'source_text': self.source_text.text().strip() if hasattr(self, 'source_text') else '',
+                'source_x': self.source_x.value() if hasattr(self, 'source_x') else 50,
+                'source_y': self.source_y.value() if hasattr(self, 'source_y') else 50,
+                'source_font_size': self.source_font_size.value() if hasattr(self, 'source_font_size') else 14,
+                'source_font_color': self.source_font_color.currentText() if hasattr(self, 'source_font_color') else 'white',
+                'subtitle_size': self.subtitle_size.value(),
+                'subtitle_y': self.subtitle_y.value(),
+                'subtitle_style': self.subtitle_style.currentText()
+            }
 
-            self.add_log("INFO", f"📁 Output directory: {output_dir}")
-
-            # ==================================================================
-            # 🔥 STEP 1: BANNER PROCESSING (nếu được bật)
-            # ==================================================================
-            banner_output_files = []  # Track các file sau khi xử lý banner
+            # Log settings
+            self.add_log("INFO", "🚀 Starting background processing...")
+            self.add_log("INFO", f"📊 Files: {len(files_to_process)}")
+            self.add_log("INFO", f"📁 Output: {output_dir}")
             
-            if add_banner_checked:
-                self.add_log("INFO", "🔄 [DEBUG] ENTERING BANNER PROCESSING BRANCH")
-                banner_video_path = self.banner_path.text().strip()
-
-                # Kiểm tra banner file
-                if not banner_video_path or not os.path.exists(banner_video_path):
-                    self.add_log("ERROR", f"❌ Banner video file not found or path is empty.")
-                    self.set_processing_state(False)
-                    return
-
-                # Log thông tin banner processing
-                self.add_log("INFO", "🎬 UNIVERSAL Banner Processing Started:")
-                self.add_log("INFO", f"   📁 Banner file: {os.path.basename(banner_video_path)}")
-
-                successful_banner_files = 0
-                for idx, main_video_path in enumerate(files_to_process, 1):
-                    base_name = os.path.basename(main_video_path)
-                    name_without_ext = os.path.splitext(base_name)[0]
-                    file_ext = os.path.splitext(base_name)[1]
-                    
-                    self.add_log("INFO", f"--- Banner processing {idx}/{len(files_to_process)}: {base_name} ---")
-                    
-                    # Cập nhật UI
-                    if hasattr(self, 'current_file_label'):
-                        self.current_file_label.setText(f"Adding banner: {base_name}")
-                    if hasattr(self, 'current_progress'):
-                        progress = int((idx-1) / len(files_to_process) * 100)
-                        self.current_progress.setValue(progress)
-                    QApplication.processEvents()
-                    
-                    # Tạo đường dẫn file output cho banner
-                    banner_output_path = os.path.join(output_dir, f"{name_without_ext}_with_banner{file_ext}")
-                    
-                    # 🔥 GỌI HÀM ĐIỀU PHỐI UNIVERSAL CHO TỪNG VIDEO
-                    success = self.process_banner_with_universal_mapping(
-                        main_video_path, 
-                        banner_video_path, 
-                        banner_output_path
-                    )
-                    
-                    # Cập nhật trạng thái trong hàng đợi
-                    if idx <= self.queue_list.count():
-                        queue_item = self.queue_list.item(idx - 1)
-                        if success:
-                            successful_banner_files += 1
-                            queue_item.setText(f"✅🖼️ {base_name}")
-                            banner_output_files.append(banner_output_path)  # 🔥 QUAN TRỌNG: Lưu file đã xử lý banner
-                        else:
-                            queue_item.setText(f"❌🖼️ {base_name}")
-                            banner_output_files.append(main_video_path)  # Fallback to original file
-                            
-                self.add_log("SUCCESS", f"🎉 UNIVERSAL Banner Processing Complete!")
-                self.add_log("SUCCESS", f"   ✅ Successful: {successful_banner_files}/{len(files_to_process)} files")
-                self.add_log("INFO", f"🔍 [DEBUG] Banner output files count: {len(banner_output_files)}")
-                        
-            else:
-                self.add_log("INFO", "🔄 [DEBUG] SKIPPING BANNER PROCESSING")
-                # Nếu không có banner processing, sử dụng files gốc
-                banner_output_files = files_to_process.copy()
-                self.add_log("INFO", f"🔍 [DEBUG] Using original files count: {len(banner_output_files)}")
-
-            # ==================================================================
-            # 🔥 STEP 2: SOURCE TEXT PROCESSING (NEW ADDITION)
-            # ==================================================================
-            source_output_files = []
-
-            if add_source_checked and SOURCE_TEXT_AVAILABLE:
-                self.add_log("INFO", "🔄 [DEBUG] *** ENTERING SOURCE TEXT PROCESSING BRANCH (WITH UNIVERSAL MAPPING) ***")
-                self.add_log("INFO", "📎 Source Text Processing Started with Universal Mapping")
-                
-                # Determine source mode
-                if hasattr(self, 'source_mode_filename') and self.source_mode_filename.isChecked():
-                    source_mode = "filename"
-                    custom_text = ""
-                    self.add_log("INFO", "📂 Using filename extraction mode (from ORIGINAL filenames)")
-                else:
-                    source_mode = "custom"
-                    custom_text = self.source_text.text().strip() if hasattr(self, 'source_text') else "@YourChannel"
-                    if not custom_text:
-                        self.add_log("WARNING", "⚠️ Custom source text is empty, skipping source text processing")
-                        source_output_files = banner_output_files.copy()
-                    else:
-                        self.add_log("INFO", f"✏️ Using custom text: '{custom_text}'")
-                
-                if source_mode == "filename" or (source_mode == "custom" and custom_text):
-                    # 🔥 Use banner output files as input
-                    input_files_for_source = banner_output_files
-                    original_filenames_for_extraction = files_to_process  # Original filenames for extraction
-                    
-                    self.add_log("INFO", f"🔄 Processing {len(input_files_for_source)} files for source text with UNIVERSAL MAPPING...")
-                    
-                    # 🔥 DEBUG: Log file mappings
-                    self.add_log("INFO", f"🔍 [SOURCE DEBUG] Processing {len(input_files_for_source)} files:")
-                    for i, (processed_file, original_file) in enumerate(zip(input_files_for_source, original_filenames_for_extraction)):
-                        processed_name = os.path.basename(processed_file)
-                        original_name = os.path.basename(original_file)
-                        self.add_log("INFO", f"   {i+1}. Input: {processed_name}")
-                        self.add_log("INFO", f"      Original: {original_name}")
-                    
-                    # 🔥 PROCESS EACH FILE WITH UNIVERSAL MAPPING
-                    successful_source_files = []
-                    
-                    for idx, video_file in enumerate(input_files_for_source, 1):
-                        try:
-                            base_name = os.path.basename(video_file)
-                            name_without_ext = os.path.splitext(base_name)[0]
-                            file_ext = os.path.splitext(base_name)[1]
-                            
-                            self.add_log("INFO", f"📎 Processing {idx}/{len(input_files_for_source)}: {base_name}")
-                            
-                            # Update UI
-                            if hasattr(self, 'current_file_label'):
-                                self.current_file_label.setText(f"Adding source text: {base_name}")
-                            if hasattr(self, 'current_progress'):
-                                progress = int((idx-1) / len(input_files_for_source) * 100)
-                                self.current_progress.setValue(progress)
-                            QApplication.processEvents()
-                            
-                            # 🔥 GET VIDEO DIMENSIONS FOR MAPPING
-                            video_width, video_height = self.get_video_dimensions(video_file)
-                            if not video_width or not video_height:
-                                self.add_log("ERROR", f"❌ Cannot get dimensions for: {base_name}")
-                                continue
-                            
-                            # 🔥 CALCULATE UNIVERSAL MAPPING
-                            source_params = self.calculate_universal_source_params(video_width, video_height)
-                            if not source_params:
-                                self.add_log("ERROR", f"❌ Universal mapping calculation failed for: {base_name}")
-                                continue
-                            
-                            # 🔥 DETERMINE SOURCE TEXT BASED ON MODE
-                            if source_mode == "filename":
-                                # Use original filename for extraction
-                                if original_filenames_for_extraction and idx <= len(original_filenames_for_extraction):
-                                    original_filename = os.path.basename(original_filenames_for_extraction[idx - 1])
-                                    source_text = extract_source_from_filename(original_filename)
-                                    self.add_log("INFO", f"🔍 Extracting from original: {original_filename}")
-                                    
-                                    if not source_text:
-                                        self.add_log("WARNING", f"⚠️ No source text found in original filename: {original_filename}")
-                                        continue
-                                    self.add_log("SUCCESS", f"✅ Extracted source text: '{source_text}'")
-                                else:
-                                    self.add_log("ERROR", f"❌ No original filename available for index {idx}")
-                                    continue
-                            else:  # custom mode
-                                source_text = custom_text
-                                self.add_log("INFO", f"📝 Using custom text: '{source_text}'")
-                            
-                            # 🔥 CREATE OUTPUT PATH
-                            output_path = os.path.join(output_dir, f"{name_without_ext}_with_source{file_ext}")
-                            
-                            # 🔥 CALL SOURCE TEXT FUNCTION WITH UNIVERSAL MAPPING
-                            success, message = add_source_text_to_video(
-                                input_video_path=video_file,
-                                output_video_path=output_path,
-                                source_text=source_text,
-                                position_x=source_params["position_x"],    # ⬅️ MAPPED position
-                                position_y=source_params["position_y"],    # ⬅️ MAPPED position
-                                font_size=source_params["font_size"],      # ⬅️ MAPPED font size
-                                font_color=source_params["font_color"],    # ⬅️ GUI color
-                                ffmpeg_executable=None
-                            )
-                            
-                            if success:
-                                successful_source_files.append(output_path)
-                                self.add_log("SUCCESS", f"✅ Source text added with universal mapping: {base_name}")
-                                self.add_log("INFO", f"   📁 Output: {os.path.basename(output_path)}")
-                            else:
-                                self.add_log("ERROR", f"❌ Failed to add source text to {base_name}: {message}")
-                                
-                        except Exception as e:
-                            self.add_log("ERROR", f"❌ Error processing {base_name}: {str(e)}")
-                            import traceback
-                            self.add_log("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
-                            continue
-                    
-                    # Update source_output_files with successful results
-                    source_output_files = successful_source_files
-                    
-                    # Update queue status
-                    for idx in range(len(input_files_for_source)):
-                        if idx < self.queue_list.count():
-                            queue_item = self.queue_list.item(idx)
-                            current_text = queue_item.text()
-                            if idx < len(successful_source_files):
-                                # Success - add source icon
-                                if "✅" in current_text:
-                                    queue_item.setText(current_text.replace("✅", "✅📎"))
-                                else:
-                                    queue_item.setText(f"✅📎 {os.path.basename(input_files_for_source[idx])}")
-                            else:
-                                # Failed - add failed source icon
-                                if "❌" not in current_text:
-                                    queue_item.setText(f"❌📎 {os.path.basename(input_files_for_source[idx])}")
-                    
-                    self.add_log("SUCCESS", f"🎉 Source Text Processing Complete with UNIVERSAL MAPPING!")
-                    self.add_log("SUCCESS", f"   ✅ Successful: {len(successful_source_files)}/{len(input_files_for_source)} files")
-                    self.add_log("INFO", f"💡 Mapping mode: {'Original filename extraction' if source_mode == 'filename' else 'Custom text overlay'}")
-                    
-                    if len(successful_source_files) < len(input_files_for_source):
-                        failed_count = len(input_files_for_source) - len(successful_source_files)
-                        self.add_log("WARNING", f"   ⚠️ Failed: {failed_count} files (check logs for details)")
-                else:
-                    # No source text processing, use banner output
-                    source_output_files = banner_output_files.copy()
-
-            elif add_source_checked and not SOURCE_TEXT_AVAILABLE:
-                self.add_log("ERROR", "❌ Source text processing requested but module not available")
-                source_output_files = banner_output_files.copy()
-            else:
-                self.add_log("INFO", "🔄 [DEBUG] *** SOURCE TEXT PROCESSING SKIPPED - CHECKBOX NOT CHECKED ***")
-                source_output_files = banner_output_files.copy()
-
-            # ==================================================================
-            # 🔥 STEP 3: SUBTITLE PROCESSING (nếu được bật) - CRITICAL SECTION
-            # ==================================================================
-            subtitle_output_files = []
-
-            self.add_log("INFO", f"🔍 [DEBUG] Checking subtitle condition: add_subtitle_checked = {add_subtitle_checked}")
+            effects = []
+            if settings['add_banner']: effects.append("Banner")
+            if settings['add_subtitle']: effects.append("Subtitle")
+            if settings['add_source']: effects.append("Source")
+            if settings['add_voice']: effects.append("Voice")
             
-            if add_subtitle_checked:
-                self.add_log("INFO", "🔄 [DEBUG] *** ENTERING SUBTITLE PROCESSING BRANCH ***")
-                self.add_log("INFO", "📝 AI SUBTITLE Processing Started:")
-                
-                # 🔥 CRITICAL: Validate API key trước khi bắt đầu
-                self.add_log("INFO", "🔍 [DEBUG] Starting API key validation...")
-                api_key = self.get_validated_api_key()
-                if not api_key:
-                    self.add_log("ERROR", "❌ [DEBUG] API key validation failed - STOPPING SUBTITLE PROCESSING")
-                    subtitle_output_files = source_output_files.copy()
-                    self.add_log("WARNING", "⚠️ Subtitle processing skipped due to API key issue")
-                else:
-                    self.add_log("SUCCESS", f"✅ [DEBUG] API key validated successfully: {len(api_key)} chars")
-                    
-                    # 🔥 TEST IMPORT SUBTITLE MODULE
-                    self.add_log("INFO", "🔍 [DEBUG] Testing subtitle module import...")
-                    try:
-                        from gg_api.get_subtitle import process_video_for_subtitles, get_default_words_per_line
-                        self.add_log("SUCCESS", "✅ [DEBUG] Subtitle module imported successfully")
-                    except Exception as import_error:
-                        self.add_log("ERROR", f"❌ [DEBUG] Subtitle module import failed: {str(import_error)}")
-                        self.add_log("WARNING", "⚠️ Subtitle processing skipped due to import issue")
-                        api_key = None  # Disable subtitle processing
-                        subtitle_output_files = source_output_files.copy()
-                    
-                    if api_key:  # Only proceed if API key is valid and import successful
-                        subtitle_successful_files = 0
-                        
-                        # Use source output files as input for subtitle processing
-                        input_files_for_subtitle = source_output_files
-                        
-                        self.add_log("INFO", f"🔍 [DEBUG] Files to process for subtitle: {len(input_files_for_subtitle)}")
-                        
-                        # 🔥 CRITICAL: Xử lý subtitle cho từng file
-                        for idx, video_file in enumerate(input_files_for_subtitle, 1):
-                            base_name = os.path.basename(video_file)
-                            
-                            self.add_log("INFO", f"🔍 [DEBUG] --- Subtitle processing {idx}/{len(input_files_for_subtitle)}: {base_name} ---")
-                            
-                            # Validate file exists
-                            if not os.path.exists(video_file):
-                                self.add_log("ERROR", f"❌ [DEBUG] File not found for subtitle processing: {video_file}")
-                                continue
-                            
-                            # Cập nhật UI
-                            if hasattr(self, 'current_file_label'):
-                                self.current_file_label.setText(f"Adding subtitles: {base_name}")
-                            if hasattr(self, 'current_progress'):
-                                progress = int((idx-1) / len(input_files_for_subtitle) * 100)
-                                self.current_progress.setValue(progress)
-                            QApplication.processEvents()
-                            
-                            # 🔥 CRITICAL: Gọi hàm xử lý subtitle
-                            self.add_log("INFO", f"🤖 [DEBUG] *** CALLING process_subtitles_for_video() for {base_name} ***")
-                            
-                            try:
-                                import time
-                                start_time = time.time()
-                                success, subtitle_output = self.process_subtitles_for_video(video_file, output_dir)
-                                end_time = time.time()
-                                elapsed = end_time - start_time
-                                
-                                self.add_log("INFO", f"🔍 [DEBUG] Subtitle processing result: success={success} (took {elapsed:.1f}s)")
-                                if success:
-                                    self.add_log("INFO", f"🔍 [DEBUG] Subtitle output file: {subtitle_output}")
-                            except Exception as subtitle_error:
-                                self.add_log("ERROR", f"❌ [DEBUG] Exception in subtitle processing: {str(subtitle_error)}")
-                                import traceback
-                                self.add_log("ERROR", f"📋 [DEBUG] Traceback: {traceback.format_exc()}")
-                                success = False
-                                subtitle_output = video_file
-                            
-                            # Cập nhật queue status
-                            if idx <= self.queue_list.count():
-                                queue_item = self.queue_list.item(idx - 1)
-                                current_text = queue_item.text()
-                                if success:
-                                    subtitle_successful_files += 1
-                                    subtitle_output_files.append(subtitle_output)
-                                    # Thêm icon subtitle vào status
-                                    if "✅" in current_text:
-                                        queue_item.setText(current_text.replace("✅", "✅📝"))
-                                    else:
-                                        queue_item.setText(f"✅📝 {base_name}")
-                                else:
-                                    subtitle_output_files.append(video_file)  # Fallback
-                                    if "❌" not in current_text:
-                                        queue_item.setText(f"❌📝 {base_name}")
-                        
-                        self.add_log("SUCCESS", f"🎉 AI SUBTITLE Processing Complete!")
-                        self.add_log("SUCCESS", f"   ✅ Successful: {subtitle_successful_files}/{len(input_files_for_subtitle)} files")
-                        
-                        if subtitle_successful_files < len(input_files_for_subtitle):
-                            failed_count = len(input_files_for_subtitle) - subtitle_successful_files
-                            self.add_log("WARNING", f"   ⚠️ Failed: {failed_count} files (check logs for details)")
-            else:
-                self.add_log("INFO", "🔄 [DEBUG] *** SUBTITLE PROCESSING SKIPPED - CHECKBOX NOT CHECKED ***")
-                subtitle_output_files = source_output_files.copy()
+            if effects:
+                self.add_log("INFO", f"🎨 Effects: {', '.join(effects)}")
 
-            # ==================================================================
-            # 🔥 COMPLETION
-            # ==================================================================
-            
-            # Cập nhật UI hoàn thành
-            if hasattr(self, 'current_file_label'):
-                self.current_file_label.setText("Batch processing completed!")
-            if hasattr(self, 'current_progress'):
-                self.current_progress.setValue(100)
+            # Clear and setup queue
+            if hasattr(self, 'queue_list'):
+                self.queue_list.clear()
+                for file_path in files_to_process:
+                    queue_item = QListWidgetItem(f"⏳ {os.path.basename(file_path)}")
+                    self.queue_list.addItem(queue_item)
 
-            self.add_log("SUCCESS", "🎉 COMPLETE BATCH PROCESSING SESSION FINISHED!")
-            self.add_log("SUCCESS", f"   📁 Output folder: {output_dir}")
+            # 🔥 Setup và start worker - ĐÂY LÀ ĐIỂM QUAN TRỌNG
+            self.processing_worker.setup_processing(files_to_process, output_dir, settings)
+            self.processing_worker.start()  # Bắt đầu background thread
             
-            # Thống kê tổng quát
-            total_processed = len(files_to_process)
-            pipeline_steps = []
-            if add_banner_checked:
-                pipeline_steps.append("Banner")
-            if add_source_checked:
-                pipeline_steps.append("Source Text")
-            if add_subtitle_checked:
-                pipeline_steps.append("Subtitle")
+            self.add_log("SUCCESS", "✅ Background processing started - GUI remains responsive!")
             
-            if pipeline_steps:
-                self.add_log("INFO", f"   🎬 Pipeline: Video → {' → '.join(pipeline_steps)} → Final Output")
-            
-            self.add_log("INFO", f"   📊 Total files processed: {total_processed}")
-
         except Exception as e:
-            self.add_log("ERROR", f"❌ A critical error occurred during processing: {str(e)}")
-            import traceback
-            self.add_log("ERROR", f"   📋 Full traceback: {traceback.format_exc()}")
-        finally:
-            # LUÔN LUÔN HOÀN TẤT TRẠNG THÁI PROCESSING
+            self.add_log("ERROR", f"❌ Error starting processing: {str(e)}")
             self.set_processing_state(False)
     
+    def stop_processing(self):
+        """Stop current processing"""
+        if self.is_processing and self.processing_worker.isRunning():
+            self.add_log("INFO", "🛑 Stopping processing...")
+            self.processing_worker.stop_processing()
+            self.processing_worker.wait(5000)  # Wait max 5 seconds
+            self.set_processing_state(False)
+            self.add_log("WARNING", "⚠️ Processing stopped by user")
+
     def create_processing_tab(self):
         """Progress monitoring and queue management"""
         widget = QWidget()
@@ -3283,14 +3262,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.btn_pause_queue.setObjectName("warningButton")
         self.btn_resume_queue = QPushButton("▶️ Resume")
         self.btn_resume_queue.setObjectName("primaryButton")
+        self.btn_stop_queue = QPushButton("🛑 Stop")
+        self.btn_stop_queue.setObjectName("dangerButton")
+        self.btn_stop_queue.clicked.connect(self.stop_processing)
         self.btn_cancel_queue = QPushButton("❌ Cancel All")
         self.btn_cancel_queue.setObjectName("dangerButton")
-        
+
         queue_controls.addWidget(self.btn_pause_queue)
         queue_controls.addWidget(self.btn_resume_queue)
+        queue_controls.addWidget(self.btn_stop_queue)  # 🔥 THÊM DÒNG NÀY
         queue_controls.addWidget(self.btn_cancel_queue)
         queue_controls.addStretch()
-        
+                
         queue_layout.addLayout(queue_controls)
         layout.addWidget(queue_group)
         
