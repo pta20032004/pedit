@@ -1,0 +1,20 @@
+#MÃ GIẢ
+def chunk_partition(file.srt): 
+	
+	chunk = [] #chứa các nhóm text
+	lines = line of file
+	add đoạn subtitle đầu tiên vào chunk
+
+	loop: lặp qua các line, lấy timestamp
+		time = start_time_of_this - end_time_of_forward
+		if time >= 1:
+			create new chunk
+			chunk.append(this_subtitle)
+		else:
+			add this subtitle vào chunk hiện tại
+	
+	output: đã phân chia được các chunk trong một video	
+
+
+def
+			

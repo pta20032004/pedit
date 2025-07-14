@@ -33,3 +33,5 @@ webvtt-py
 # Authentication
 google-auth
 google-auth-oauthlib
+edge-tts 
+pysrt

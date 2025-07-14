@@ -126,18 +126,159 @@ def extract_audio_from_video(video_path: str, audio_output_path: str, ffmpeg_pat
 def create_subtitle_generation_prompt(source_lang: str, target_lang: str) -> str:
     """Create prompt for initial subtitle generation"""
     
-    # Clean language names (remove emoji flags)
+    # Clean language names - ONLY POPULAR LANGUAGES
     lang_map = {
-        "🔍 Auto Detect": "auto-detect",
-        "🇺🇸 English": "English", "🇬🇧 English (UK)": "English", 
-        "🇨🇦 English (CA)": "English", "🇦🇺 English (AU)": "English",
-        "🇨🇳 Chinese": "Chinese", "🇯🇵 Japanese": "Japanese", 
-        "🇩🇪 German": "German", "🇮🇳 Hindi": "Hindi",
-        "🇫🇷 French": "French", "🇮🇹 Italian": "Italian", 
-        "🇧🇷 Portuguese": "Portuguese", "🇰🇷 Korean": "Korean",
-        "🇪🇸 Spanish": "Spanish", "🇷🇺 Russian": "Russian", 
-        "🇳🇱 Dutch": "Dutch", "🇸🇦 Arabic": "Arabic", 
-        "🇦🇪 Arabic (UAE)": "Arabic", "🇻🇳 Vietnamese": "Vietnamese"
+        # === AUTO DETECT ===
+    "🔍 Auto Detect": "auto-detect",
+    
+    # === A ===
+    "🇦🇱 Albanian": "Albanian",
+    "🇸🇦 Arabic": "Arabic",
+    "🇦🇪 Arabic (UAE)": "Arabic", 
+    "🇪🇬 Arabic (Egypt)": "Arabic",
+    "🇦🇷 Argentina (Spanish)": "Spanish",
+    
+    # === B ===
+    "🇧🇩 Bangladesh": "Bengali",
+    "🇧🇩 Bengali": "Bengali",
+    "🇧🇦 Bosnian": "Bosnian",
+    "🇧🇷 Brazil (Portuguese)": "Portuguese",
+    "🇧🇬 Bulgaria": "Bulgarian",
+    "🇧🇬 Bulgarian": "Bulgarian",
+    
+    # === C ===
+    "🇪🇸 Catalan": "Catalan",
+    "🇨🇱 Chile (Spanish)": "Spanish",
+    "🇨🇳 China (Simplified)": "Chinese",
+    "🇨🇳 Chinese": "Chinese", 
+    "🇨🇳 Chinese (Simplified)": "Chinese",
+    "🇹🇼 Chinese (Traditional)": "Chinese",
+    "🇨🇴 Colombia (Spanish)": "Spanish",
+    "🇭🇷 Croatia": "Croatian",
+    "🇭🇷 Croatian": "Croatian",
+    "🇨🇿 Czech": "Czech",
+    "🇨🇿 Czech Republic": "Czech",
+    
+    # === D ===
+    "🇩🇰 Danish": "Danish",
+    "🇩🇰 Denmark": "Danish",
+    "🇳🇱 Dutch": "Dutch",
+    
+    # === E ===
+    "🇺🇸 English": "English", 
+    "🇺🇸 English (US)": "English",
+    "🇬🇧 English (UK)": "English", 
+    "🇨🇦 English (CA)": "English", 
+    "🇨🇦 English (Canada)": "English",
+    "🇦🇺 English (Australia)": "English",
+    "🇳🇿 English (New Zealand)": "English",
+    "🇮🇪 English (Ireland)": "English",
+    "🇿🇦 English (South Africa)": "English",
+    "🇪🇪 Estonia": "Estonian",
+    "🇪🇪 Estonian": "Estonian",
+    
+    # === F ===
+    "🇵🇭 Filipino": "Filipino",
+    "🇫🇮 Finland": "Finnish",
+    "🇫🇮 Finnish": "Finnish",
+    "🇫🇷 France": "French", 
+    "🇫🇷 French": "French", 
+    
+    # === G ===
+    "🇩🇪 German": "German", 
+    "🇩🇪 Germany": "German",
+    "🇬🇷 Greece": "Greek",
+    "🇬🇷 Greek": "Greek",
+    "🇮🇳 Gujarati": "Gujarati",
+    
+    # === H ===
+    "🇮🇱 Hebrew": "Hebrew",
+    "🇮🇳 Hindi": "Hindi",
+    "🇮🇳 India (Hindi)": "Hindi",
+    "🇭🇺 Hungary": "Hungarian",
+    "🇭🇺 Hungarian": "Hungarian",
+    
+    # === I ===
+    "🇮🇩 Indonesia": "Indonesian", 
+    "🇮🇩 Indonesian": "Indonesian", 
+    "🇮🇹 Italian": "Italian", 
+    "🇮🇹 Italy": "Italian",
+    
+    # === J ===
+    "🇯🇵 Japan": "Japanese", 
+    "🇯🇵 Japanese": "Japanese", 
+    
+    # === K ===
+    "🇮🇳 Kannada": "Kannada",
+    "🇰🇷 Korean": "Korean",
+    "🇰🇷 South Korea": "Korean",
+    
+    # === L ===
+    "🇱🇻 Latvia": "Latvian",
+    "🇱🇻 Latvian": "Latvian",
+    "🇱🇹 Lithuania": "Lithuanian",
+    "🇱🇹 Lithuanian": "Lithuanian",
+    
+    # === M ===
+    "🇲🇰 Macedonian": "Macedonian",
+    "🇲🇾 Malay": "Malay",
+    "🇲🇾 Malaysia": "Malay",
+    "🇮🇳 Malayalam": "Malayalam",
+    "🇮🇳 Marathi": "Marathi", 
+    "🇲🇽 Mexico (Spanish)": "Spanish",
+    
+    # === N ===
+    "🇳🇱 Netherlands": "Dutch",
+    "🇳🇴 Norway": "Norwegian", 
+    "🇳🇴 Norwegian": "Norwegian", 
+    
+    # === P ===
+    "🇵🇰 Pakistan": "Urdu",
+    "🇮🇷 Persian": "Persian",
+    "🇵🇪 Peru (Spanish)": "Spanish",
+    "🇵🇭 Philippines": "Filipino",
+    "🇵🇱 Poland": "Polish",
+    "🇵🇱 Polish": "Polish",
+    "🇵🇹 Portugal": "Portuguese",
+    "🇵🇹 Portuguese": "Portuguese", 
+    
+    # === R ===
+    "🇷🇴 Romania": "Romanian",
+    "🇷🇴 Romanian": "Romanian", 
+    "🇷🇺 Russia": "Russian",
+    "🇷🇺 Russian": "Russian", 
+    
+    # === S ===
+    "🇷🇸 Serbia": "Serbian",
+    "🇷🇸 Serbian": "Serbian",
+    "🇸🇰 Slovakia": "Slovak",
+    "🇸🇰 Slovak": "Slovak",
+    "🇸🇮 Slovenia": "Slovenian",
+    "🇸🇮 Slovenian": "Slovenian",
+    "🇪🇸 Spain": "Spanish",
+    "🇪🇸 Spanish": "Spanish", 
+    "🇸🇪 Sweden": "Swedish",
+    "🇸🇪 Swedish": "Swedish",
+    
+    # === T ===
+    "🇮🇳 Tamil": "Tamil",
+    "🇮🇳 Telugu": "Telugu", 
+    "🇹🇭 Thai": "Thai",
+    "🇹🇭 Thailand": "Thai",
+    "🇹🇼 Taiwan (Traditional)": "Chinese",
+    "🇹🇷 Turkey": "Turkish",
+    "🇹🇷 Turkish": "Turkish",
+    
+    # === U ===
+    "🇺🇦 Ukraine": "Ukrainian",
+    "🇺🇦 Ukrainian": "Ukrainian",
+    "🇵🇰 Urdu": "Urdu",
+    
+    # === V ===
+    "🇻🇪 Venezuela (Spanish)": "Spanish",
+    "🇻🇳 Vietnam": "Vietnamese",
+    "🇻🇳 Vietnamese": "Vietnamese"
+
     }
     
     source_clean = lang_map.get(source_lang, source_lang)
@@ -174,15 +315,6 @@ Second short subtitle here
 
 IMPORTANT: Each subtitle block has only ONE line of text in {target_clean}.
 Begin with subtitle number 1:"""
-    
-    return prompt
-
-def create_format_correction_prompt(raw_subtitle: str) -> str:
-    """Create prompt for format correction using Gemini-2.5-flash"""   
-    
-    prompt = f"""Find any lines with incorrect formatting that do not follow the standard .srt format "hh:mm:ss,mm --> hh:mm:ss,mmm" and correct them immediately. Each subtitle block must be separated by a blank line. Output must be in the standard .srt file format. Do not write anything else — only the corrected SRT content.
-{raw_subtitle}
-"""
     
     return prompt
 
@@ -795,23 +927,52 @@ def process_video_for_subtitles(video_path: str, api_key: str, source_lang: str,
 
 def get_default_words_per_line(target_language: str) -> int:
     """Get default words per line for target language"""
-    # Language-specific defaults (kept for compatibility)
+    # Language-specific defaults - EXPANDED VERSION
     defaults = {
-        "Chinese": 6,
-        "Japanese": 8,
-        "Korean": 7,
-        "Arabic": 6,
-        "English": 8,
-        "Spanish": 8,
-        "French": 8,
-        "German": 6,
-        "Russian": 7,
-        "Vietnamese": 8
+        # === LATIN SCRIPT LANGUAGES ===
+        "English": 8, "Spanish": 8, "French": 8, "Italian": 8, "Portuguese": 8,
+        "Romanian": 8, "Catalan": 8, "Galician": 8, "Indonesian": 8, "Malay": 8,
+        "Filipino": 8, "Vietnamese": 8, "Albanian": 7, "Bosnian": 7, "Croatian": 7,
+        "Romanian": 8, "Bulgarian": 7, "Croatian": 7, "Serbian": 7,
+        "Lithuanian": 6, "Latvian": 7, "Estonian": 7,
+        "Swedish": 7, "Danish": 7, "Norwegian": 7,
+        "Hungarian": 6, "Finnish": 6, "Turkish": 6,  # Agglutinative languages
+        "Greek": 7,
+        
+        # === COMPOUND WORD LANGUAGES ===
+        "German": 6, "Dutch": 6, "Icelandic": 6, "Lithuanian": 6,
+        
+        # === AGGLUTINATIVE LANGUAGES ===
+        "Finnish": 6, "Hungarian": 6, "Turkish": 6,
+        
+        # === CJK SCRIPTS ===
+        "Chinese": 6, "Japanese": 8, "Korean": 7,
+        
+        # === ARABIC SCRIPT ===
+        "Arabic": 6, "Persian": 6, "Urdu": 6, "Hebrew": 6,
+        
+        # === SOUTH ASIAN SCRIPTS ===
+        "Hindi": 7, "Bengali": 7, "Gujarati": 7, "Marathi": 7,
+        "Tamil": 6, "Telugu": 6, "Kannada": 6, "Malayalam": 6,
+        
+        # === SOUTHEAST ASIAN ===
+        "Thai": 6,
     }
     
     # Clean language name
     clean_lang = target_language.split(" ")[1] if " " in target_language else target_language
-    clean_lang = clean_lang.replace("🇺🇸", "").replace("🇨🇳", "").strip()
+    
+    # Remove all emoji flags
+    import re
+    clean_lang = re.sub(r'🇦-🇿', '', clean_lang).strip()
+    
+    # Handle country format like "Brazil (Portuguese)" -> "Portuguese"
+    if "(" in clean_lang:
+        # Extract language from parentheses
+        if ")" in clean_lang:
+            clean_lang = clean_lang.split("(")[1].split(")")[0].strip()
+        else:
+            clean_lang = clean_lang.split("(")[0].strip()
     
     return defaults.get(clean_lang, 8)
 

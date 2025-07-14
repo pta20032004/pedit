@@ -32,6 +32,7 @@ def fix_errors_format(text):
 				Nếu gặp lỗi, number_errors = number_errors + 1
 		if number_errors == 0:
 			test = False
+
 		
 			
 			

@@ -6,7 +6,7 @@ import base64
 
 client = genai.Client(api_key= "tự điền")
 
-contents = ('Tạo hình ảnh con mèo đang nhảy')
+contents = ('Tạo hình bác sĩ đang khám bệnh')
 
 response = client.models.generate_content(
     model="gemini-2.0-flash-preview-image-generation",
