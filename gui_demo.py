@@ -3379,19 +3379,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         self.video_preview.update()
     
     def add_log(self, level, message):
-        """Add formatted log entry with timestamp and color"""
+        """Add formatted log entry with timestamp and color - FIXED SYNC"""
         color_map = {
             "INFO": "#0A86DE",
             "SUCCESS": "#68d391", 
             "WARNING": "#f6ad55",
-            "ERROR": "#fc8181"
+            "ERROR": "#fc8181",
+            "DEBUG": "#9ca3af"  # Thêm DEBUG level
         }
         
         color = color_map.get(level, "#e2e8f0")
-        timestamp = "12:34:56"  # Placeholder timestamp
+        
+        # 🔥 FIX: Lấy thời gian thực từ hệ thống
+        import datetime
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%H:%M:%S")  # Format: 14:35:42
         
         formatted_msg = f'<span style="color: {color};">[{timestamp}] [{level}]</span> {message}'
-        self.log_text.append(formatted_msg)
+        
+        # Thêm vào log display
+        if hasattr(self, 'log_text') and self.log_text is not None:
+            self.log_text.append(formatted_msg)
+            
+            # Auto scroll to bottom if enabled
+            if hasattr(self, 'auto_scroll_enabled') and self.auto_scroll_enabled:
+                scrollbar = self.log_text.verticalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
     
     # Event Handlers
     def add_files(self):
