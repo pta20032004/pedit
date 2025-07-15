@@ -2,6 +2,7 @@
 def chunk_partition(file.srt): 
 	
 	chunk = [] #chứa các nhóm text
+	#chunk chứa thông tin về thời gian bắt đầu và thời gian kết thúc của chunk
 	lines = line of file
 	add đoạn subtitle đầu tiên vào chunk
 
@@ -15,9 +16,31 @@ def chunk_partition(file.srt):
 	
 	output: đã phân chia được các chunk trong một video	
 
+process_audio(audio., chunk): 
+	a = time_start_of_chunk
+	b = time_end_of_chunk
+	length_of_chunk = b - a
+	length_of_audio = ...
+
+	if length_of_audio > length_of_chunk: 
+		tăng tốc audio để cho length_of_audio = length_of_chunk
+
+	elif length_of_chunk - length_of_audio >= 2 and length_of_chunk - length_of_audio <= 3:
+		tăng giảm tốc độ audio
+
+	elif length_of_audio < 0.95 * length_of_chunk:
+		tằng tốc...
 
 # Chèn voice AI vào video
 def get_voice_AI(chunks):
 	for chunk in chunks:
+		add audio vào chunk, thời gian bắt đầu chèn là thời gian của chunk
+		process_audio()
+
+
+
+
+		
+
 		
 			

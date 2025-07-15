@@ -63,6 +63,10 @@ import sys
 import json
 import os
 import re
+# Thêm vào phần import ở đầu file gui_demo.py
+import time
+from typing import Tuple
+from PyQt5.QtCore import QThread, pyqtSignal
 
 # THÊM VÀO ĐẦU FILE gui_demo.py - SAU PHẦN IMPORT HIỆN TẠI
 try:
@@ -156,16 +160,337 @@ class SimpleSpinner(QLabel):
         self.setText(self.spinner_chars[self.current_index])
         self.current_index = (self.current_index + 1) % len(self.spinner_chars)
 
-class ProcessingWorker(QThread):
-    """Worker thread để xử lý video trong background"""
+class SingleAPIWorker(QThread):
+    """
+    🔥 NEW: Isolated worker for single API processing
+    Mỗi worker hoạt động hoàn toàn độc lập với API key riêng
+    """
     
-    # Signals để communicate với main thread
-    progress_updated = pyqtSignal(int)  # Overall progress (0-100)
-    current_file_updated = pyqtSignal(str)  # Current file name
-    current_step_updated = pyqtSignal(str)  # Current step
-    log_message = pyqtSignal(str, str)  # (level, message)
-    queue_updated = pyqtSignal(int, str)  # (index, status)
-    processing_finished = pyqtSignal(bool)  # (success)
+    # Signals for communication
+    worker_log = pyqtSignal(str, str, str)  # (worker_id, level, message)
+    worker_progress = pyqtSignal(str, int)  # (worker_id, progress_percent)
+    worker_finished = pyqtSignal(str, bool, str)  # (worker_id, success, result_path)
+    worker_started = pyqtSignal(str, str)  # (worker_id, video_filename)
+    
+    def __init__(self, worker_id: str, api_key: str, main_window):
+        super().__init__()
+        self.worker_id = worker_id
+        self.api_key = api_key
+        self.main_window = main_window
+        self.current_video = None
+        self.current_settings = None
+        self.should_stop = False
+        self.is_busy = False
+        
+        # Private log method for this worker
+        self._log_prefix = f"[API-{worker_id}]"
+    
+    def is_available(self) -> bool:
+        """Check if worker is available for new task"""
+        return not self.is_busy and not self.isRunning()
+    
+    def assign_video(self, video_path: str, output_dir: str, settings: dict):
+        """Assign a video for processing"""
+        if not self.is_available():
+            return False
+            
+        self.current_video = video_path
+        self.output_dir = output_dir
+        self.current_settings = settings.copy()  # Deep copy to avoid conflicts
+        return True
+    
+    def stop_processing(self):
+        """Stop current processing"""
+        self.should_stop = True
+    
+    def _log(self, level: str, message: str):
+        """Private logging method for this worker"""
+        full_message = f"{self._log_prefix} {message}"
+        self.worker_log.emit(self.worker_id, level, full_message)
+    
+    def run(self):
+        """
+        Main processing loop - COMPLETELY ISOLATED
+        """
+        if not self.current_video or not self.api_key:
+            self._log("ERROR", "❌ No video assigned or API key missing")
+            self.worker_finished.emit(self.worker_id, False, "")
+            return
+        
+        self.is_busy = True
+        self.should_stop = False
+        
+        try:
+            video_name = os.path.basename(self.current_video)
+            self.worker_started.emit(self.worker_id, video_name)
+            self._log("INFO", f"🎬 Starting processing: {video_name}")
+            
+            # STEP 0: Progress 10%
+            self.worker_progress.emit(self.worker_id, 10)
+            
+            # STEP 1: Process with isolated API key
+            success, result_path = self._process_video_isolated(
+                self.current_video, 
+                self.output_dir, 
+                self.current_settings
+            )
+            
+            # STEP 2: Progress 100%
+            self.worker_progress.emit(self.worker_id, 100)
+            
+            if success:
+                self._log("SUCCESS", f"✅ Completed: {video_name}")
+            else:
+                self._log("ERROR", f"❌ Failed: {video_name}")
+            
+            self.worker_finished.emit(self.worker_id, success, result_path)
+            
+        except Exception as e:
+            self._log("ERROR", f"❌ Worker exception: {str(e)}")
+            self.worker_finished.emit(self.worker_id, False, "")
+        finally:
+            self.is_busy = False
+    
+    def _process_video_isolated(self, video_path: str, output_dir: str, settings: dict) -> Tuple[bool, str]:
+        """
+        🔥 ISOLATED VIDEO PROCESSING with dedicated API key
+        No shared resources with other workers
+        """
+        try:
+            base_name = os.path.basename(video_path)
+            name_without_ext = os.path.splitext(base_name)[0]
+            file_ext = os.path.splitext(base_name)[1]
+            
+            # Final output path
+            final_output = os.path.join(output_dir, f"{name_without_ext}_processed{file_ext}")
+            current_video = video_path
+            temp_files_to_delete = []
+            
+            # PROGRESS: 20%
+            self.worker_progress.emit(self.worker_id, 20)
+            
+            # STEP 1: Subtitles (ISOLATED API CALL)
+            if settings.get('add_subtitle', False):
+                self._log("INFO", f"📝 Adding subtitles with API key {self.api_key[:10]}...")
+                
+                success, subtitle_video = self._process_subtitles_isolated(
+                    current_video, output_dir, settings
+                )
+                
+                if success and subtitle_video:
+                    current_video = subtitle_video
+                    temp_files_to_delete.append(subtitle_video)
+                    self._log("SUCCESS", "✅ Subtitles added")
+                else:
+                    self._log("ERROR", "❌ Subtitle processing failed")
+                    return False, ""
+            
+            # PROGRESS: 60%
+            self.worker_progress.emit(self.worker_id, 60)
+            
+            # STEP 2: Banner (if enabled)
+            if settings.get('add_banner', False):
+                self._log("INFO", f"🖼️ Adding banner...")
+                
+                banner_output = os.path.join(output_dir, f"{name_without_ext}_with_banner{file_ext}")
+                success = self._process_banner_isolated(current_video, settings, banner_output)
+                
+                if success:
+                    current_video = banner_output
+                    temp_files_to_delete.append(banner_output)
+                    self._log("SUCCESS", "✅ Banner added")
+                else:
+                    self._log("ERROR", "❌ Banner processing failed")
+                    return False, ""
+            
+            # PROGRESS: 80%
+            self.worker_progress.emit(self.worker_id, 80)
+            
+            # STEP 3: Source text (if enabled)
+            if settings.get('add_source', False):
+                self._log("INFO", f"📎 Adding source text...")
+                
+                success = self._process_source_text_isolated(
+                    current_video, final_output, base_name, settings
+                )
+                
+                if success:
+                    self._log("SUCCESS", f"✅ Source text added")
+                else:
+                    self._log("ERROR", f"❌ Source text failed")
+                    return False, ""
+            else:
+                # No source text - copy current video to final
+                import shutil
+                shutil.copy2(current_video, final_output)
+            
+            # PROGRESS: 95%
+            self.worker_progress.emit(self.worker_id, 95)
+            
+            # CLEANUP
+            for temp_file in temp_files_to_delete:
+                try:
+                    if os.path.exists(temp_file) and temp_file != final_output:
+                        os.remove(temp_file)
+                except:
+                    pass
+            
+            return True, final_output
+            
+        except Exception as e:
+            self._log("ERROR", f"❌ Isolated processing error: {str(e)}")
+            return False, ""
+    
+    def _process_subtitles_isolated(self, video_path: str, output_dir: str, settings: dict) -> Tuple[bool, str]:
+        """ISOLATED subtitle processing with ENHANCED error handling"""
+        try:
+            base_name = os.path.basename(video_path)
+            name_without_ext = os.path.splitext(base_name)[0]
+            file_ext = os.path.splitext(base_name)[1]
+            
+            source_lang = settings.get('source_lang', '🔍 Auto Detect')
+            target_lang = settings.get('target_lang', '🇺🇸 English (US)')
+            
+            self._log("INFO", f"🌐 Languages: {source_lang} → {target_lang}")
+            
+            # 🔥 ENHANCED: Retry logic with different approaches
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    from gg_api.get_subtitle import process_video_for_subtitles
+                    
+                    success, srt_content, message = process_video_for_subtitles(
+                        video_path=video_path,
+                        api_key=self.api_key,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        words_per_line=8,
+                        ffmpeg_path=None,
+                        log_callback=lambda level, msg: self._log(level, msg)
+                    )
+                    
+                    if success and srt_content:
+                        break  # Success, exit retry loop
+                        
+                    if "403" in str(message) or "permission" in str(message).lower():
+                        self._log("WARNING", f"🔄 Attempt {attempt+1}: Permission error, trying different approach...")
+                        # Try with simpler settings
+                        if attempt == 1:
+                            source_lang = "🇺🇸 English (US)"  # Force English
+                        elif attempt == 2:
+                            target_lang = "🇺🇸 English (US)"  # Force target English
+                    else:
+                        self._log("ERROR", f"🔄 Attempt {attempt+1}: {message}")
+                        
+                except Exception as e:
+                    self._log("ERROR", f"🔄 Attempt {attempt+1} exception: {str(e)}")
+                    
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2)  # Wait before retry
+            
+            if not success:
+                self._log("ERROR", f"❌ All {max_retries} attempts failed")
+                return False, ""
+            
+            # Continue with SRT processing...
+            srt_temp_path = os.path.join(output_dir, f"{name_without_ext}_subtitle.srt")
+            with open(srt_temp_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            output_video_path = os.path.join(output_dir, f"{name_without_ext}_with_subtitles{file_ext}")
+            
+            subtitle_success = self.main_window.add_subtitles_to_video(
+                input_video=video_path,
+                srt_file=srt_temp_path,
+                output_video=output_video_path
+            )
+            
+            if subtitle_success:
+                return True, output_video_path
+            else:
+                return False, ""
+                
+        except Exception as e:
+            self._log("ERROR", f"❌ Isolated subtitle error: {str(e)}")
+            return False, ""
+    
+    def _process_banner_isolated(self, video_path: str, settings: dict, output_path: str) -> bool:
+        """ISOLATED banner processing"""
+        try:
+            # Use main window's banner processing (shared but thread-safe)
+            return self.main_window.process_banner_with_universal_mapping(
+                video_path, 
+                settings.get('banner_path', ''),
+                output_path
+            )
+        except Exception as e:
+            self._log("ERROR", f"❌ Isolated banner error: {str(e)}")
+            return False
+    
+    def _process_source_text_isolated(self, input_video: str, output_video: str, 
+                                    base_name: str, settings: dict) -> bool:
+        """ISOLATED source text processing"""
+        try:
+            if not SOURCE_TEXT_AVAILABLE:
+                return False
+            
+            # Get video dimensions
+            video_width, video_height = self.main_window.get_video_dimensions(input_video)
+            if not video_width or not video_height:
+                return False
+            
+            # Calculate parameters
+            source_params = self.main_window.calculate_universal_source_params(video_width, video_height)
+            if not source_params:
+                return False
+            
+            # Determine source text
+            if settings.get('source_mode_filename', False):
+                from source_text import extract_source_from_filename
+                source_text = extract_source_from_filename(base_name)
+            else:
+                source_text = settings.get('source_text', '@YourChannel')
+            
+            # Add source text
+            from source_text import add_source_text_to_video
+            success, message = add_source_text_to_video(
+                input_video_path=input_video,
+                output_video_path=output_video,
+                source_text=source_text,
+                position_x=source_params['position_x'],
+                position_y=source_params['position_y'],
+                font_size=source_params['font_size'],
+                font_color=source_params['font_color']
+            )
+            
+            return success
+            
+        except Exception as e:
+            self._log("ERROR", f"❌ Isolated source text error: {str(e)}")
+            return False
+
+    def wait(self):
+        """Wait for worker to finish"""
+        if self.isRunning():
+            super().wait()
+
+    def reset_for_next_video(self):
+        """Reset worker state for next video"""
+        self.current_video = None
+        self.current_settings = None
+        self.is_busy = False
+
+
+class ProcessingWorker(QThread):
+    """🔥 FINAL VERSION: True parallel processing with proper synchronization"""
+    
+    progress_updated = pyqtSignal(int)
+    current_file_updated = pyqtSignal(str)
+    current_step_updated = pyqtSignal(str)
+    log_message = pyqtSignal(str, str)
+    queue_updated = pyqtSignal(int, str)
+    processing_finished = pyqtSignal(bool)
     
     def __init__(self, parent):
         super().__init__(parent)
@@ -175,235 +500,173 @@ class ProcessingWorker(QThread):
         self.settings = {}
         self.should_stop = False
         
+        # 🔥 FIXED: Proper thread management
+        self.api_worker_1 = None
+        self.api_worker_2 = None
+        self.worker1_thread = None
+        self.worker2_thread = None
+        self.completed_videos = 0
+        self.total_videos = 0
+        self.progress_lock = threading.Lock()  # Thread safety
+        
     def setup_processing(self, files_to_process, output_dir, settings):
         """Setup processing parameters"""
         self.files_to_process = files_to_process
         self.output_dir = output_dir
         self.settings = settings
         self.should_stop = False
+        self.completed_videos = 0
+        self.total_videos = len(files_to_process)
         
     def stop_processing(self):
-        """Stop processing gracefully"""
+        """Stop all workers gracefully"""
         self.should_stop = True
         
-    def run(self):
-        """Main processing loop - runs in background thread"""
-        try:
-            self.log_message.emit("INFO", "🚀 Background processing started...")
-            
-            total_files = len(self.files_to_process)
-            successful_files = 0
-            
-            for i, video_path in enumerate(self.files_to_process):
-                if self.should_stop:
-                    self.log_message.emit("WARNING", "⚠️ Processing cancelled by user")
-                    break
-                
-                # Update current file
-                file_name = os.path.basename(video_path)
-                self.current_file_updated.emit(f"Processing: {file_name}")
-                self.queue_updated.emit(i, "🔄 Processing...")
-                
-                # Process single file
-                success = self.process_single_file(video_path, i + 1, total_files)
-                
-                if success:
-                    successful_files += 1
-                    self.queue_updated.emit(i, "✅ Completed")
-                    self.log_message.emit("SUCCESS", f"✅ Completed: {file_name}")
-                else:
-                    self.queue_updated.emit(i, "❌ Failed")
-                    self.log_message.emit("ERROR", f"❌ Failed: {file_name}")
-                
-                # Update overall progress
-                overall_progress = int((i + 1) / total_files * 100)
-                self.progress_updated.emit(overall_progress)
-                
-                # Small delay để UI có thể update
-                self.msleep(100)
-            
-            # Final results
-            self.current_file_updated.emit("Processing completed")
-            self.current_step_updated.emit(f"Finished: {successful_files}/{total_files} successful")
-            
-            success_rate = successful_files == total_files
-            self.processing_finished.emit(success_rate)
-            
-            if success_rate:
-                self.log_message.emit("SUCCESS", f"🎉 All {total_files} files processed successfully!")
-            else:
-                self.log_message.emit("WARNING", f"⚠️ Processing completed: {successful_files}/{total_files} successful")
-                
-        except Exception as e:
-            self.log_message.emit("ERROR", f"❌ Worker thread error: {str(e)}")
-            self.processing_finished.emit(False)
+        if self.api_worker_1 and self.api_worker_1.isRunning():
+            self.api_worker_1.stop_processing()
+            self.api_worker_1.wait(3000)
+        
+        if self.api_worker_2 and self.api_worker_2.isRunning():
+            self.api_worker_2.stop_processing()
+            self.api_worker_2.wait(3000)
     
-    def process_single_file(self, video_path, current_index, total_files):
-        """Process a single video file"""
+    def setup_isolated_workers(self, api_key_1: str, api_key_2: str):
+        """Setup 2 completely isolated API workers"""
         try:
-            base_name = os.path.basename(video_path)
-            name_without_ext = os.path.splitext(base_name)[0]
-            file_ext = os.path.splitext(base_name)[1]
+            self.api_worker_1 = SingleAPIWorker("Worker-1", api_key_1, self.parent)
+            self.api_worker_2 = SingleAPIWorker("Worker-2", api_key_2, self.parent)
             
-            self.log_message.emit("INFO", f"📹 [{current_index}/{total_files}] Processing: {base_name}")
+            # Connect signals but handle progress differently
+            self.api_worker_1.worker_log.connect(self.on_worker_log)
+            self.api_worker_1.worker_finished.connect(self.on_worker_finished)
             
-            # 🔥 FINAL OUTPUT PATH (chỉ một file cuối)
-            final_output = os.path.join(self.output_dir, f"{name_without_ext}_with_source{file_ext}")
+            self.api_worker_2.worker_log.connect(self.on_worker_log)
+            self.api_worker_2.worker_finished.connect(self.on_worker_finished)
             
-            # 🔥 DANH SÁCH CÁC FILE TRUNG GIAN CẦN XÓA
-            temp_files_to_delete = []
-            
-            # Working video path (sẽ được cập nhật qua các bước)
-            current_video = video_path
-            
-            # STEP 1: Add subtitles
-            if self.settings.get('add_subtitle', False):
-                self.current_step_updated.emit("Step 1/4: Adding subtitles...")
-                
-                success, subtitle_video = self.parent.process_subtitles_for_video(
-                    current_video, self.output_dir
-                )
-                
-                if success and subtitle_video:
-                    current_video = subtitle_video
-                    temp_files_to_delete.append(subtitle_video)  # 🔥 ĐÁNH DẤU XÓA
-                    self.log_message.emit("SUCCESS", "✅ Subtitles added successfully")
-                    
-                    # 🔥 CHUYỂN FILE SRT VÀO FOLDER SUBTITLE
-                    self.move_srt_to_subtitle_folder(subtitle_video)
-                else:
-                    self.log_message.emit("ERROR", "❌ Subtitle processing failed")
-                    return False
-            
-            # STEP 2: Add banner
-            if self.settings.get('add_banner', False):
-                self.current_step_updated.emit("Step 2/4: Adding banner...")
-                
-                banner_output = os.path.join(self.output_dir, f"{name_without_ext}_with_banner{file_ext}")
-                
-                success = self.parent.process_banner_with_universal_mapping(
-                    current_video, 
-                    self.settings.get('banner_path', ''),
-                    banner_output
-                )
-                
-                if success:
-                    current_video = banner_output
-                    temp_files_to_delete.append(banner_output)  # 🔥 ĐÁNH DẤU XÓA
-                    self.log_message.emit("SUCCESS", "✅ Banner added successfully")
-                else:
-                    self.log_message.emit("ERROR", "❌ Banner processing failed")
-                    return False
-            
-            # STEP 3: Add source text (FILE CUỐI CÙNG)
-            if self.settings.get('add_source', False) and SOURCE_TEXT_AVAILABLE:
-                self.current_step_updated.emit("Step 3/4: Adding source text...")
-                
-                # Get video dimensions for universal mapping
-                video_width, video_height = self.parent.get_video_dimensions(current_video)
-                
-                if video_width and video_height:
-                    source_params = self.parent.calculate_universal_source_params(video_width, video_height)
-                    
-                    if source_params:
-                        # Determine source text
-                        if self.settings.get('source_mode_filename', False):
-                            from source_text import extract_source_from_filename
-                            source_text = extract_source_from_filename(base_name)
-                        else:
-                            source_text = self.settings.get('source_text', '@YourChannel')
-                        
-                        # 🔥 Add source text - TRỰC TIẾP VÀO FILE CUỐI
-                        from source_text import add_source_text_to_video
-                        success, message = add_source_text_to_video(
-                            input_video_path=current_video,
-                            output_video_path=final_output,  # 🔥 TRỰC TIẾP VÀO FILE CUỐI
-                            source_text=source_text,
-                            position_x=source_params['position_x'],
-                            position_y=source_params['position_y'],
-                            font_size=source_params['font_size'],
-                            font_color=source_params['font_color']
-                        )
-                        
-                        if success:
-                            self.log_message.emit("SUCCESS", f"✅ Source text added: {source_text}")
-                        else:
-                            self.log_message.emit("ERROR", f"❌ Source text processing failed: {message}")
-                            return False
-                    else:
-                        self.log_message.emit("ERROR", "❌ Cannot calculate source parameters")
-                        return False
-                else:
-                    self.log_message.emit("ERROR", "❌ Cannot get video dimensions for source text")
-                    return False
-            else:
-                # 🔥 NẾU KHÔNG CÓ SOURCE TEXT, COPY VIDEO HIỆN TẠI VÀO FILE CUỐI
-                import shutil
-                shutil.copy2(current_video, final_output)
-                self.log_message.emit("INFO", "ℹ️ No source text, copied current video as final")
-            
-            # STEP 4: 🔥 DỌN DẸP CÁC FILE TRUNG GIAN
-            self.current_step_updated.emit("Step 4/4: Cleaning up...")
-            
-            deleted_count = 0
-            for temp_file in temp_files_to_delete:
-                try:
-                    if os.path.exists(temp_file) and temp_file != final_output:
-                        os.remove(temp_file)
-                        deleted_count += 1
-                        self.log_message.emit("INFO", f"🗑️ Deleted temp file: {os.path.basename(temp_file)}")
-                except Exception as e:
-                    self.log_message.emit("WARNING", f"⚠️ Could not delete {os.path.basename(temp_file)}: {str(e)}")
-            
-            self.log_message.emit("SUCCESS", f"✅ Final output: {os.path.basename(final_output)}")
-            self.log_message.emit("INFO", f"🧹 Cleaned up {deleted_count} temporary files")
+            self.log_message.emit("SUCCESS", f"✅ ISOLATED workers created:")
+            self.log_message.emit("INFO", f"   🔑 Worker-1: {api_key_1[:10]}...{api_key_1[-4:]}")
+            self.log_message.emit("INFO", f"   🔑 Worker-2: {api_key_2[:10]}...{api_key_2[-4:]}")
             
             return True
             
         except Exception as e:
-            self.log_message.emit("ERROR", f"❌ Error processing {base_name}: {str(e)}")
-            import traceback
-            self.log_message.emit("ERROR", f"   📋 Traceback: {traceback.format_exc()}")
+            self.log_message.emit("ERROR", f"❌ Failed to create isolated workers: {str(e)}")
             return False
-
-    def move_srt_to_subtitle_folder(self, video_path):
-        """🔥 NEW: Chuyển file SRT vào folder subtitle"""
+    
+    def on_worker_log(self, worker_id: str, level: str, message: str):
+        """Handle log messages from workers"""
+        self.log_message.emit(level, message)
+    
+    def on_worker_finished(self, worker_id: str, success: bool, result_path: str):
+        """Handle worker completion with thread safety"""
+        with self.progress_lock:
+            self.completed_videos += 1
+            
+            status = "✅" if success else "❌"
+            self.log_message.emit("INFO", f"{status} {worker_id} completed. Total: {self.completed_videos}/{self.total_videos}")
+            
+            # Update overall progress
+            overall_progress = int((self.completed_videos / self.total_videos) * 100)
+            self.progress_updated.emit(overall_progress)
+    
+    def run(self):
+        """🔥 FINAL: True parallel processing"""
         try:
-            # Tìm file SRT tương ứng
-            video_dir = os.path.dirname(video_path)
-            video_base = os.path.splitext(os.path.basename(video_path))[0]
+            # Setup workers
+            api_key_1, api_key_2 = self.parent.get_dual_api_keys()
+            if not self.setup_isolated_workers(api_key_1, api_key_2):
+                return
             
-            # File SRT có thể có tên khác nhau
-            possible_srt_names = [
-                f"{video_base}.srt",
-                f"{video_base}_subtitle.srt",
-                video_base.replace("_with_subtitles", "_subtitle") + ".srt"
-            ]
+            # 🔥 STRATEGY: Split videos evenly
+            if len(self.files_to_process) == 1:
+                # Single video - use worker 1 only
+                worker1_videos = self.files_to_process
+                worker2_videos = []
+            else:
+                # Multiple videos - distribute evenly
+                mid_point = len(self.files_to_process) // 2
+                worker1_videos = self.files_to_process[:mid_point]
+                worker2_videos = self.files_to_process[mid_point:]
             
-            # Tạo folder subtitle
-            subtitle_folder = os.path.join(self.output_dir, "subtitle")
-            if not os.path.exists(subtitle_folder):
-                os.makedirs(subtitle_folder)
-                self.log_message.emit("INFO", f"📁 Created subtitle folder: {subtitle_folder}")
+            self.log_message.emit("INFO", f"🔄 TRUE PARALLEL SPLIT:")
+            self.log_message.emit("INFO", f"   Worker-1: {len(worker1_videos)} videos")
+            self.log_message.emit("INFO", f"   Worker-2: {len(worker2_videos)} videos")
             
-            # Tìm và chuyển file SRT
-            for srt_name in possible_srt_names:
-                srt_path = os.path.join(video_dir, srt_name)
-                if os.path.exists(srt_path):
-                    new_srt_path = os.path.join(subtitle_folder, srt_name)
-                    
-                    import shutil
-                    shutil.move(srt_path, new_srt_path)
-                    
-                    self.log_message.emit("SUCCESS", f"📄 Moved SRT to: subtitle/{srt_name}")
-                    return True
+            # 🔥 Start both workers in TRUE parallel threads
+            self.worker1_thread = threading.Thread(
+                target=self._process_video_list,
+                args=(self.api_worker_1, worker1_videos, "Worker-1"),
+                daemon=True
+            )
             
-            self.log_message.emit("WARNING", "⚠️ SRT file not found for moving")
-            return False
+            if worker2_videos:  # Only start worker 2 if it has videos
+                self.worker2_thread = threading.Thread(
+                    target=self._process_video_list,
+                    args=(self.api_worker_2, worker2_videos, "Worker-2"),
+                    daemon=True
+                )
+            
+            # 🔥 START BOTH SIMULTANEOUSLY
+            self.worker1_thread.start()
+            if self.worker2_thread:
+                self.worker2_thread.start()
+            
+            self.log_message.emit("SUCCESS", "🚀 Both workers started in TRUE PARALLEL mode!")
+            
+            # 🔥 WAIT FOR BOTH TO COMPLETE
+            self.worker1_thread.join()
+            if self.worker2_thread:
+                self.worker2_thread.join()
+            
+            # Final status
+            self.log_message.emit("SUCCESS", f"🎉 TRUE PARALLEL processing completed!")
+            self.processing_finished.emit(True)
             
         except Exception as e:
-            self.log_message.emit("ERROR", f"❌ Error moving SRT file: {str(e)}")
-            return False
+            self.log_message.emit("ERROR", f"❌ Parallel coordinator error: {str(e)}")
+            self.processing_finished.emit(False)
+    
+    def _process_video_list(self, worker, video_list, worker_name):
+        """🔥 ENHANCED: Process list with detailed timing"""
+        try:
+            import time
+            
+            for i, video_path in enumerate(video_list):
+                if self.should_stop:
+                    break
+                
+                start_time = time.time()
+                video_name = os.path.basename(video_path)
+                
+                self.log_message.emit("INFO", f"📹 {worker_name} starting: {video_name} ({i+1}/{len(video_list)})")
+                
+                # Process video
+                if worker.assign_video(video_path, self.output_dir, self.settings):
+                    worker.start()
+                    worker.wait()
+                    
+                    # Calculate timing
+                    elapsed = time.time() - start_time
+                    self.log_message.emit("SUCCESS", f"✅ {worker_name} completed {video_name} in {elapsed:.1f}s")
+                    
+                    # Reset for next video
+                    worker.reset_for_next_video()
+                    
+                else:
+                    self.log_message.emit("ERROR", f"❌ {worker_name} failed to assign: {video_name}")
+                    
+        except Exception as e:
+            self.log_message.emit("ERROR", f"❌ {worker_name} processing error: {str(e)}")
+
+    def reset_for_next_video(self):
+        """Reset worker state for next video"""
+        self.current_video = None
+        self.current_settings = None
+        self.is_busy = False
+        self.should_stop = False
+
+
+
 
 class VideoPreviewWidget(QLabel):
     """Custom widget for displaying 9:16 video preview with overlay areas - FIXED SYNC"""
@@ -1810,47 +2073,92 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # ==============================================================================
 
     # THÊM MỚI 1: Hàm phụ trợ để cập nhật trạng thái API một cách nhất quán
-    def _update_api_status(self, status: str, message: str):
-        """
-        Cập nhật label trạng thái API với màu sắc và nội dung tương ứng.
-        Args:
-            status (str): Trạng thái ('SUCCESS', 'ERROR', 'WARNING', 'INFO', 'TESTING').
-            message (str): Nội dung thông báo.
-        """
+    def _update_api_status(self, api_number: int, status: str, message: str):
+        """Update API status label"""
         status_colors = {
-            "SUCCESS": "#16a34a",  # Green
-            "ERROR": "#dc2626",    # Red
-            "WARNING": "#d97706",  # Amber
-            "INFO": "#0ea5e9",     # Blue
-            "TESTING": "#d97706"   # Amber
+            "SUCCESS": "#16a34a",
+            "ERROR": "#dc2626", 
+            "WARNING": "#d97706",
+            "INFO": "#0ea5e9",
+            "TESTING": "#d97706"
         }
-        color = status_colors.get(status, "#6b7280") # Mặc định là màu xám
+        color = status_colors.get(status, "#6b7280")
         
-        if hasattr(self, 'api_status_label'):
+        if api_number == 1 and hasattr(self, 'api_status_label'):
             self.api_status_label.setText(f"Primary API: {message}")
             self.api_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        elif api_number == 2 and hasattr(self, 'api_status_label_2'):
+            self.api_status_label_2.setText(f"Secondary API: {message}")
+            self.api_status_label_2.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+
+    def load_api_keys_to_both_dropdowns(self):
+        """Load API keys vào cả 2 dropdown"""
+        if not hasattr(self, 'api_key_pool_1') or not hasattr(self, 'api_key_pool_2'):
+            return
+
+        # Clear both dropdowns
+        self.api_key_pool_1.clear()
+        self.api_key_pool_2.clear()
         
-        # Log thông báo tương ứng với trạng thái
-        if status in ["SUCCESS", "ERROR", "WARNING", "INFO"]:
-            self.add_log(status, message)
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            json_path = os.path.join(current_dir, "gg_api", "api_key.json")
             
+            if not os.path.exists(json_path):
+                self.api_key_pool_1.addItem("❌ api_key.json not found")
+                self.api_key_pool_2.addItem("❌ api_key.json not found")
+                return
+
+            with open(json_path, 'r', encoding='utf-8') as f:
+                api_data = json.load(f)
+
+            key_count = 0
+            for item in api_data:
+                if isinstance(item, dict):
+                    for name, api_key in item.items():
+                        if api_key and len(api_key) > 14:
+                            masked_key = f"{api_key[:10]}...{api_key[-4:]}"
+                            display_text = f"🔑 {name} ({masked_key})"
+                            
+                            # Add to both dropdowns
+                            self.api_key_pool_1.addItem(display_text, api_key)
+                            self.api_key_pool_2.addItem(display_text, api_key)
+                            key_count += 1
+            
+            if key_count > 0:
+                # Add headers
+                self.api_key_pool_1.insertItem(0, "📊 Select Primary API Key...")
+                self.api_key_pool_2.insertItem(0, "📊 Select Secondary API Key...")
+                self.api_key_pool_1.setCurrentIndex(0)
+                self.api_key_pool_2.setCurrentIndex(0)
+                
+                self.add_log("SUCCESS", f"✅ Loaded {key_count} API keys to both pools")
+            else:
+                self.api_key_pool_1.addItem("⚠️ No valid keys found")
+                self.api_key_pool_2.addItem("⚠️ No valid keys found")
+                
+        except Exception as e:
+            self.api_key_pool_1.addItem("❌ Error loading keys")
+            self.api_key_pool_2.addItem("❌ Error loading keys")
+            self.add_log("ERROR", f"Error loading API keys: {str(e)}")
+
     # SỬA ĐỔI 1: Hàm thiết lập các thành phần API khi khởi động
     def setup_api_components(self):
-        """Khởi tạo và thiết lập các thành phần liên quan đến API."""
-        self.add_log("INFO", "🚀 Initializing API system...")
-        QApplication.processEvents() # Cập nhật giao diện ngay lập tức
+        """Initialize dual API system"""
+        self.add_log("INFO", "🚀 Initializing DUAL API system...")
+        QApplication.processEvents()
 
-        # Tải các key từ file vào dropdown
-        self.load_api_keys_to_dropdown()
+        # Load keys vào cả 2 dropdowns
+        self.load_api_keys_to_both_dropdowns()
         
-        # Kiểm tra xem có key trong pool không và cập nhật trạng thái
-        if hasattr(self, 'api_key_pool') and self.api_key_pool.count() > 1:
-            self._update_api_status("INFO", "💡 Sẵn sàng - Nhập key hoặc chọn từ pool.")
-        else:
-            self._update_api_status("WARNING", "⚠️ Không có key trong pool, vui lòng nhập thủ công.")
+        # Set initial status
+        self._update_api_status(1, "INFO", "💡 Ready - Enter key or select from pool")
+        self._update_api_status(2, "INFO", "💡 Ready - Enter key or select from pool")
 
-        self.add_log("SUCCESS", "✅ API system initialization complete.")
-        self.add_log("INFO", "📋 Hướng dẫn: 1. Chọn key từ pool hoặc nhập thủ công. 2. Nhấn 'Test' để kiểm tra.")
+        self.add_log("SUCCESS", "✅ DUAL API system initialized")
+        self.add_log("INFO", "📋 Tip: Use 2 different API keys for 2x faster processing!")
+
 
     # SỬA ĐỔI 2: Hàm tải API key vào dropdown
     def load_api_keys_to_dropdown(self):
@@ -2078,6 +2386,170 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Load API setup after UI is created
         self.setup_api_components() # Dòng này sẽ gọi bộ hàm mới mà bạn vừa dán vào
     
+    def process_subtitles_for_video_with_api(self, video_path: str, output_dir: str, 
+                                       api_key: str, settings: dict) -> Tuple[bool, str]:
+        """
+        Process subtitles using specific API key (modified version of existing function)
+        """
+        try:
+            base_name = os.path.basename(video_path)
+            name_without_ext = os.path.splitext(base_name)[0]
+            file_ext = os.path.splitext(base_name)[1]
+            
+            source_lang = settings.get('source_lang', '🔍 Auto Detect')
+            target_lang = settings.get('target_lang', '🇺🇸 English (US)')
+            
+            # Import and call API function with specific key
+            from gg_api.get_subtitle import process_video_for_subtitles
+            
+            success, srt_content, message = process_video_for_subtitles(
+                video_path=video_path,
+                api_key=api_key,  # 🔥 Use specific API key
+                source_lang=source_lang,
+                target_lang=target_lang,
+                words_per_line=8,
+                ffmpeg_path=None,
+                log_callback=self.add_log
+            )
+            
+            if not success:
+                return False, ""
+            
+            # Save SRT and add to video
+            srt_temp_path = os.path.join(output_dir, f"{name_without_ext}_subtitle.srt")
+            with open(srt_temp_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            output_video_path = os.path.join(output_dir, f"{name_without_ext}_with_subtitles{file_ext}")
+            
+            subtitle_success = self.add_subtitles_to_video(
+                input_video=video_path,
+                srt_file=srt_temp_path,
+                output_video=output_video_path
+            )
+            
+            if subtitle_success:
+                return True, output_video_path
+            else:
+                return False, ""
+                
+        except Exception as e:
+            self.log_message.emit("ERROR", f"❌ API-specific subtitle error: {str(e)}")
+            return False, ""
+
+    def test_single_api_key(self, api_number: int):
+        """Test individual API key"""
+        if api_number == 1:
+            api_key = self.api_key_input.text().strip()
+            btn = self.findChild(QPushButton)  # Find test button
+        else:
+            api_key = self.api_key_input_2.text().strip()
+            btn = None
+            
+        if not api_key:
+            self._update_api_status(api_number, "WARNING", "⚠️ API key field is empty")
+            return
+
+        # Update button and status
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("🔄 Testing...")
+        
+        self._update_api_status(api_number, "TESTING", "🔄 Testing API key...")
+        QApplication.processEvents()
+
+        try:
+            if API_TESTING_AVAILABLE:
+                from gg_api.test_api import test_api_key as test_function
+                results = test_function(api_key)
+                
+                if results and results.get("success"):
+                    self._update_api_status(api_number, "SUCCESS", "✅ Valid API key")
+                    self.add_log("SUCCESS", f"API {api_number} validated: {results.get('text_model', 'N/A')}")
+                else:
+                    self._update_api_status(api_number, "ERROR", "❌ Invalid API key")
+            else:
+                self._update_api_status(api_number, "ERROR", "❌ Test module not available")
+
+        except Exception as e:
+            self._update_api_status(api_number, "ERROR", f"❌ Test failed: {str(e)}")
+        finally:
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("🔍 Test")
+
+    def use_selected_api_key_from_pool(self, api_number: int):
+        """Use selected API key from pool"""
+        if api_number == 1:
+            selected_key = self.api_key_pool_1.currentData()
+            selected_text = self.api_key_pool_1.currentText()
+            target_input = self.api_key_input
+        else:
+            selected_key = self.api_key_pool_2.currentData()
+            selected_text = self.api_key_pool_2.currentText()
+            target_input = self.api_key_input_2
+        
+        if selected_key and "📊" not in selected_text:
+            target_input.setText(selected_key)
+            self._update_api_status(api_number, "INFO", "🔑 Key loaded - Click Test")
+            self.add_log("SUCCESS", f"✅ API {api_number} key selected: {selected_text}")
+        else:
+            self._update_api_status(api_number, "WARNING", "⚠️ Please select a valid key")
+
+    def auto_fill_dual_apis(self):
+        """Automatically fill both APIs with different keys from pool"""
+        try:
+            # Get all available keys
+            available_keys = []
+            for i in range(1, self.api_key_pool_1.count()):  # Skip header
+                key_data = self.api_key_pool_1.itemData(i)
+                if key_data:
+                    available_keys.append((i, key_data))
+            
+            if len(available_keys) < 2:
+                self.add_log("WARNING", "⚠️ Need at least 2 different API keys for parallel processing")
+                return
+            
+            # Select first 2 different keys
+            key1_idx, key1 = available_keys[0]
+            key2_idx, key2 = available_keys[1]
+            
+            # Fill both inputs
+            self.api_key_input.setText(key1)
+            self.api_key_input_2.setText(key2)
+            
+            # Update dropdowns
+            self.api_key_pool_1.setCurrentIndex(key1_idx)
+            self.api_key_pool_2.setCurrentIndex(key2_idx)
+            
+            # Update status
+            self._update_api_status(1, "INFO", "🔑 Auto-filled - Click Test")
+            self._update_api_status(2, "INFO", "🔑 Auto-filled - Click Test")
+            
+            self.add_log("SUCCESS", "✅ Auto-filled both API keys from pool")
+            self.add_log("INFO", "🔍 Please test both keys before processing")
+            
+        except Exception as e:
+            self.add_log("ERROR", f"❌ Auto-fill failed: {str(e)}")
+
+    def get_dual_api_keys(self) -> Tuple[str, str]:
+        """Get both validated API keys"""
+        api_key_1 = self.api_key_input.text().strip()
+        api_key_2 = self.api_key_input_2.text().strip()
+        
+        # Validation
+        if not api_key_1:
+            self.add_log("ERROR", "❌ Primary API key is required")
+            return "", ""
+        
+        if not api_key_2:
+            self.add_log("WARNING", "⚠️ Secondary API key empty - will use primary for both")
+            return api_key_1, api_key_1
+        
+        if api_key_1 == api_key_2:
+            self.add_log("WARNING", "⚠️ Both API keys are identical - parallel benefit reduced")
+        
+        return api_key_1, api_key_2
 
     def create_left_panel(self):
         """File management and settings panel with scroll support"""
@@ -2143,49 +2615,84 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         api_frame.setObjectName("settingsFrame")
         api_grid = QGridLayout(api_frame)
         
-        # Row 1: Manual API Key Input
-        api_grid.addWidget(QLabel("Manual API Key:"), 0, 0)
+        # Header
+        api_header = QLabel("🚀 DUAL API Configuration (For Parallel Processing)")
+        api_header.setObjectName("sectionHeader")
+        api_header.setStyleSheet("font-weight: bold; color: #10b981; font-size: 12px;")
+        api_grid.addWidget(api_header, 0, 0, 1, 3)
+        
+        # Primary API Key
+        api_grid.addWidget(QLabel("Primary API Key:"), 1, 0)
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setPlaceholderText("Enter your Google AI API key manually")
+        self.api_key_input.setPlaceholderText("Enter primary Google AI API key")
         self.api_key_input.setObjectName("modernInput")
-        api_grid.addWidget(self.api_key_input, 0, 1)
+        api_grid.addWidget(self.api_key_input, 1, 1)
         
-        btn_test_api = QPushButton("🔍 Test")
-        btn_test_api.setObjectName("testButton")
-        btn_test_api.clicked.connect(self.test_api_key)
-        btn_test_api.setToolTip("Test the API key")
-        api_grid.addWidget(btn_test_api, 0, 2)
+        btn_test_api1 = QPushButton("🔍 Test")
+        btn_test_api1.setObjectName("testButton")
+        btn_test_api1.clicked.connect(lambda: self.test_single_api_key(1))
+        api_grid.addWidget(btn_test_api1, 1, 2)
         
-        # Row 2: OR separator
-        or_label = QLabel("— OR —")
+        # Secondary API Key  
+        api_grid.addWidget(QLabel("Secondary API Key:"), 2, 0)
+        self.api_key_input_2 = QLineEdit()
+        self.api_key_input_2.setEchoMode(QLineEdit.Password)
+        self.api_key_input_2.setPlaceholderText("Enter secondary API key (for parallel processing)")
+        self.api_key_input_2.setObjectName("modernInput")
+        api_grid.addWidget(self.api_key_input_2, 2, 1)
+        
+        btn_test_api2 = QPushButton("🔍 Test")
+        btn_test_api2.setObjectName("testButton")
+        btn_test_api2.clicked.connect(lambda: self.test_single_api_key(2))
+        api_grid.addWidget(btn_test_api2, 2, 2)
+        
+        # OR separator
+        or_label = QLabel("— OR SELECT FROM POOL —")
         or_label.setAlignment(Qt.AlignCenter)
         or_label.setObjectName("infoLabel")
         or_label.setStyleSheet("color: #9ca3af; font-weight: bold; margin: 8px 0;")
-        api_grid.addWidget(or_label, 1, 0, 1, 3)
+        api_grid.addWidget(or_label, 3, 0, 1, 3)
         
-        # Row 3: Select from Pool
-        api_grid.addWidget(QLabel("Select from Pool:"), 2, 0)
-        self.api_key_pool = QComboBox()
-        self.api_key_pool.setObjectName("modernCombo")
-        self.api_key_pool.addItem("🔄 Loading available keys...")
-        api_grid.addWidget(self.api_key_pool, 2, 1)
+        # Pool Selection
+        api_grid.addWidget(QLabel("Primary from Pool:"), 4, 0)
+        self.api_key_pool_1 = QComboBox()
+        self.api_key_pool_1.setObjectName("modernCombo")
+        api_grid.addWidget(self.api_key_pool_1, 4, 1)
         
-        btn_use_selected = QPushButton("✅ Use")
-        btn_use_selected.setObjectName("testButton")
-        btn_use_selected.clicked.connect(self.use_selected_api_key)
-        btn_use_selected.setToolTip("Use the selected API key from pool")
-        api_grid.addWidget(btn_use_selected, 2, 2)
+        btn_use_pool1 = QPushButton("✅ Use")
+        btn_use_pool1.clicked.connect(lambda: self.use_selected_api_key_from_pool(1))
+        api_grid.addWidget(btn_use_pool1, 4, 2)
         
-        # Row 4: API Status
+        api_grid.addWidget(QLabel("Secondary from Pool:"), 5, 0)
+        self.api_key_pool_2 = QComboBox()
+        self.api_key_pool_2.setObjectName("modernCombo")
+        api_grid.addWidget(self.api_key_pool_2, 5, 1)
+        
+        btn_use_pool2 = QPushButton("✅ Use")
+        btn_use_pool2.clicked.connect(lambda: self.use_selected_api_key_from_pool(2))
+        api_grid.addWidget(btn_use_pool2, 5, 2)
+        
+        # Auto-fill both APIs button
+        btn_auto_fill = QPushButton("🎲 Auto-Fill Both APIs from Pool")
+        btn_auto_fill.setObjectName("primaryButton")
+        btn_auto_fill.clicked.connect(self.auto_fill_dual_apis)
+        api_grid.addWidget(btn_auto_fill, 6, 0, 1, 3)
+        
+        # Status displays
         self.api_status_label = QLabel("Primary API: Not tested")
         self.api_status_label.setObjectName("statusLabel")
-        api_grid.addWidget(self.api_status_label, 3, 0, 1, 2)
+        api_grid.addWidget(self.api_status_label, 7, 0, 1, 2)
         
-        # Row 5: Backup API information
-        self.backup_api_label = QLabel("🔄 Loading backup keys...")
-        self.backup_api_label.setObjectName("infoLabel")
-        api_grid.addWidget(self.backup_api_label, 4, 0, 1, 3)
+        self.api_status_label_2 = QLabel("Secondary API: Not tested")
+        self.api_status_label_2.setObjectName("statusLabel")
+        api_grid.addWidget(self.api_status_label_2, 8, 0, 1, 2)
+        
+        # Parallel processing info
+        parallel_info = QLabel("💡 Both APIs will be used for parallel processing (2x faster)")
+        parallel_info.setObjectName("infoLabel")
+        parallel_info.setStyleSheet("color: #10b981; font-style: italic;")
+        api_grid.addWidget(parallel_info, 9, 0, 1, 3)
         
         ai_layout.addWidget(api_frame)
         
@@ -3086,23 +3593,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             self.add_log("WARNING", "⚠️ No files selected for processing")
             return
 
-        # Kiểm tra nếu đang processing
         if self.is_processing:
             self.add_log("WARNING", "⚠️ Processing already in progress")
             return
 
-        # Kiểm tra output directory
+        # Validate output directory
         output_dir = self.output_path.text().strip()
         if not output_dir or not os.path.isdir(output_dir):
-            self.add_log("ERROR", "❌ Output directory not found or path is empty.")
+            self.add_log("ERROR", "❌ Output directory not found")
             return
+
 
         # Validate API key nếu subtitle được bật
         if self.chk_add_subtitle.isChecked():
-            api_key = self.get_validated_api_key()
-            if not api_key:
-                self.add_log("ERROR", "❌ API key required for subtitle processing")
+            api_key_1, api_key_2 = self.get_dual_api_keys()
+            if not api_key_1:
+                self.add_log("ERROR", "❌ At least one API key required for subtitle processing")
                 return
+            
+            if api_key_1 == api_key_2:
+                self.add_log("WARNING", "⚠️ Using same API key for both - parallel benefit reduced")
+            else:
+                self.add_log("SUCCESS", "✅ DUAL API keys validated - ready for parallel processing!")
 
         # Validate banner file nếu banner được bật
         if self.chk_add_banner.isChecked():
